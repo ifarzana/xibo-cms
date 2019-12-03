@@ -165,20 +165,21 @@ class CampaignFactory extends BaseFactory
                 FROM lkcampaignlayout
                 WHERE lkcampaignlayout.campaignId = `campaign`.campaignId
             ) AS numberLayouts,
-            MAX(CASE WHEN `campaign`.IsLayoutSpecific = 1 THEN `layout`.retired ELSE 0 END) AS retired
+            MAX(CASE WHEN `campaign`.IsLayoutSpecific = 1 THEN `layout`.retired ELSE 0 END) AS retired,
+            (
+                SELECT GROUP_CONCAT(DISTINCT tag) 
+                FROM tag INNER JOIN lktagcampaign ON lktagcampaign.tagId = tag.tagId 
+                WHERE lktagcampaign.campaignId = campaign.CampaignID 
+                GROUP BY lktagcampaign.campaignId
+            ) AS tags,
+            
+            (
+                SELECT GROUP_CONCAT(IFNULL(value, \'NULL\')) 
+                FROM tag INNER JOIN lktagcampaign ON lktagcampaign.tagId = tag.tagId 
+                WHERE lktagcampaign.campaignId = campaign.CampaignID 
+                GROUP BY lktagcampaign.campaignId
+            ) AS tagValues
         ';
-
-        // Didn't exist before 129
-        if (DBVERSION >= 129) {
-            $select .= ',
-                (
-                    SELECT GROUP_CONCAT(DISTINCT tag) 
-                    FROM tag INNER JOIN lktagcampaign ON lktagcampaign.tagId = tag.tagId 
-                    WHERE lktagcampaign.campaignId = campaign.CampaignID 
-                    GROUP BY lktagcampaign.campaignId
-                ) AS tags
-            ';
-        }
 
         $body  = '
             FROM `campaign`
@@ -186,6 +187,8 @@ class CampaignFactory extends BaseFactory
               ON lkcampaignlayout.CampaignID = campaign.CampaignID
               LEFT OUTER JOIN `layout`
               ON lkcampaignlayout.LayoutID = layout.LayoutID
+              INNER JOIN `user`
+              ON user.userId = campaign.userId 
            WHERE 1 = 1
         ';
 
@@ -241,54 +244,31 @@ class CampaignFactory extends BaseFactory
                     )
                 ';
             } else {
+                $operator = $this->getSanitizer()->getCheckbox('exactTags') == 1 ? '=' : 'LIKE';
+
                 $body .= " AND campaign.campaignID IN (
                 SELECT lktagcampaign.campaignId
                   FROM tag
                     INNER JOIN lktagcampaign
                     ON lktagcampaign.tagId = tag.tagId
                 ";
-                $i = 0;
-                foreach (explode(',', $tagFilter) as $tag) {
-                    $i++;
 
-                    if ($i == 1)
-                        $body .= " WHERE tag LIKE :tags$i ";
-                    else
-                        $body .= " OR tag LIKE :tags$i ";
-
-                    $params['tags' . $i] = '%' . $tag . '%';
-                }
-
-                $body .= " ) ";
+                $tags = explode(',', $tagFilter);
+                $this->tagFilter($tags, $operator, $body, $params);
             }
         }
 
         if ($this->getSanitizer()->getString('name', $filterBy) != '') {
-            // convert into a space delimited array
-            $names = explode(' ', $this->getSanitizer()->getString('name', $filterBy));
-
-            $i = 0;
-            foreach($names as $searchName) {
-                $i++;
-
-                // Not like, or like?
-                if (substr($searchName, 0, 1) == '-') {
-                    $body .= " AND campaign.Campaign NOT LIKE :search$i ";
-                    $params['search' . $i] = '%' . ltrim($searchName) . '%';
-                }
-                else {
-                    $body .= " AND campaign.Campaign LIKE :search$i ";
-                    $params['search' . $i] = '%' . ltrim($searchName) . '%';
-                }
-            }
+            $terms = explode(',', $this->getSanitizer()->getString('name', $filterBy));
+            $this->nameFilter('campaign', 'Campaign', $terms, $body, $params);
         }
 
         // Exclude templates by default
         if ($this->getSanitizer()->getInt('excludeTemplates', 1, $filterBy) != -1) {
             if ($this->getSanitizer()->getInt('excludeTemplates', 1, $filterBy) == 1) {
-                $body .= " AND `campaign`.campaignId NOT IN (SELECT `campaignId` FROM `lkcampaignlayout` WHERE layoutId IN (SELECT layoutId FROM lktaglayout WHERE tagId = 1)) ";
+                $body .= " AND `campaign`.campaignId NOT IN (SELECT `campaignId` FROM `lkcampaignlayout` WHERE layoutId IN (SELECT layoutId FROM lktaglayout INNER JOIN tag ON lktaglayout.tagId = tag.tagId WHERE tag = 'template')) ";
             } else {
-                $body .= " AND `campaign`.campaignId IN (SELECT `campaignId` FROM `lkcampaignlayout` WHERE layoutId IN (SELECT layoutId FROM lktaglayout WHERE tagId = 1)) ";
+                $body .= " AND `campaign`.campaignId IN (SELECT `campaignId` FROM `lkcampaignlayout` WHERE layoutId IN (SELECT layoutId FROM lktaglayout INNER JOIN tag ON lktaglayout.tagId = tag.tagId WHERE tag = 'template')) ";
             }
         }
 
@@ -302,6 +282,14 @@ class CampaignFactory extends BaseFactory
                 $group .= ' OR campaign.campaignId = :includeCampaignId ';
                 $params['includeCampaignId'] = $this->getSanitizer()->getInt('includeCampaignId', $filterBy);
             }
+        }
+
+        $user = $this->getUser();
+
+        if ( ($user->userTypeId == 1 && $user->showContentFrom == 2) || $user->userTypeId == 4 ) {
+            $body .= ' AND user.userTypeId = 4 ';
+        } else {
+            $body .= ' AND user.userTypeId <> 4 ';
         }
 
         // Sorting?
@@ -333,7 +321,7 @@ class CampaignFactory extends BaseFactory
         // Paging
         if ($limit != '' && count($campaigns) > 0) {
             if ($this->getSanitizer()->getInt('retired', -1, $filterBy) != -1) {
-                $body .= ' AND retired = :retired ';
+                $body .= ' AND layout.retired = :retired ';
             }
 
             $results = $this->getStore()->select('SELECT COUNT(DISTINCT campaign.campaignId) AS total ' . $body, $params);

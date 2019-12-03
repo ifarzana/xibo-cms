@@ -23,12 +23,33 @@ namespace Xibo\Widget;
 
 class PowerPoint extends ModuleWidget
 {
+    /** @inheritdoc */
+    public function edit()
+    {
+        $this->setDuration($this->getSanitizer()->getInt('duration', $this->getDuration()));
+        $this->setUseDuration($this->getSanitizer()->getCheckbox('useDuration'));
+        $this->setOption('name', $this->getSanitizer()->getString('name'));
+        $this->setOption('enableStat', $this->getSanitizer()->getString('enableStat'));
+        $this->saveWidget();
+    }
+
+    /**
+     * Javascript functions for the layout designer
+     */
+    public function layoutDesignerJavaScript()
+    {
+        // We use the same javascript as the data set view designer
+        return 'powerpoint-designer-javascript';
+    }
+
+    /** @inheritdoc */
     public function isValid()
     {
         // Client dependant
-        return 2;
+        return self::$STATUS_PLAYER;
     }
 
+    /** @inheritdoc */
     public function editForm()
     {
         return 'generic-form-edit';

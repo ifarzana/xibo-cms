@@ -49,23 +49,25 @@ class GetResourceTest extends LocalWebTestCase
         // Create a Layout
         $this->layout = $this->createLayout();
 
+        // Checkout
+        $layout = $this->getDraft($this->layout);
+
         // Add a resource heavy module to the Layout (one that will download images)
-        $response = $this->getEntityProvider()->post('/playlist/widget/ticker/' . $this->layout->regions[0]->playlists[0]['playlistId'], [
+        $response = $this->getEntityProvider()->post('/playlist/widget/ticker/' . $layout->regions[0]->regionPlaylist->playlistId);
+
+        $response = $this->getEntityProvider()->put('/playlist/widget/' . $response['widgetId'], [
             'uri' => 'http://ceu.xibo.co.uk/mediarss/feed.xml',
             'duration' => 100,
             'useDuration' => 1,
             'sourceId' => 1,
+            'templateId' => 'media-rss-with-title'
         ]);
 
         // Edit the Ticker to add the template
         $this->widget = (new XiboTicker($this->getEntityProvider()))->hydrate($response);
 
-        $this->getEntityProvider()->put('/playlist/widget/' . $this->widget->widgetId, [
-            'uri' => 'http://ceu.xibo.co.uk/mediarss/feed.xml',
-            'duration' => 100,
-            'useDuration' => 1,
-            'templateId' => 'media-rss-with-title'
-        ]);
+        // Checkin
+        $this->layout = $this->publish($this->layout);
 
         // Set the Layout status
         $this->setLayoutStatus($this->layout, 3);
@@ -79,7 +81,7 @@ class GetResourceTest extends LocalWebTestCase
         // Schedule the Layout "always" onto our display
         //  deleting the layout will remove this at the end
         $event = (new XiboSchedule($this->getEntityProvider()))->createEventLayout(
-            date('Y-m-d H:i:s', time()+3600),
+            date('Y-m-d H:i:s', time()),
             date('Y-m-d H:i:s', time()+7200),
             $this->layout->campaignId,
             [$this->display->displayGroupId],
@@ -87,6 +89,7 @@ class GetResourceTest extends LocalWebTestCase
             NULL,
             NULL,
             NULL,
+            0,
             0,
             0
         );

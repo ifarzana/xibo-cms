@@ -176,16 +176,25 @@ class UserFactory extends BaseFactory
     }
 
     /**
+     * Get Dooh user
+     * @return User[]
+     */
+    public function getDoohUsers()
+    {
+        return $this->query(null, array('disableUserCheck' => 1, 'userTypeId' => 4));
+    }
+
+    /**
      * Get system user
      * @return User
      */
     public function getSystemUser()
     {
         $user = $this->create();
-        $user->userId = 0;
+        $user->userId = 1;
         $user->userName = 'system';
         $user->userTypeId = 1;
-        $user->email = $this->configService->GetSetting('mail_to');
+        $user->email = $this->configService->getSetting('mail_to');
 
         return $user;
     }
@@ -196,15 +205,15 @@ class UserFactory extends BaseFactory
      * @param array[mixed] $filterBy
      * @return array[User]
      */
-    public function query($sortOrder = array(), $filterBy = array())
+    public function query($sortOrder = [], $filterBy = [])
     {
-        $entries = array();
+        $entries = [];
 
         // Default sort order
-        if (count($sortOrder) <= 0)
-            $sortOrder = array('userName');
+        if ($sortOrder === null || count($sortOrder) <= 0)
+            $sortOrder = ['userName'];
 
-        $params = array();
+        $params = [];
         $select = '
             SELECT `user`.userId,
                 userName,
@@ -216,20 +225,9 @@ class UserFactory extends BaseFactory
                 CSPRNG,
                 UserPassword AS password,
                 group.groupId,
-                group.group
-        ';
-
-        if (DBVERSION >= 120) {
-            $select .= '
-                ,
+                group.group,
                 `pages`.pageId AS homePageId,
-                `pages`.title AS homePage
-            ';
-        }
-
-        if (DBVERSION >= 121) {
-            $select .= '
-                ,
+                `pages`.title AS homePage,
                 `user`.firstName,
                 `user`.lastName,
                 `user`.phone,
@@ -237,36 +235,16 @@ class UserFactory extends BaseFactory
                 `user`.ref2,
                 `user`.ref3,
                 `user`.ref4,
-                `user`.ref5
+                `user`.ref5,
+                IFNULL(group.libraryQuota, 0) AS libraryQuota,
+                `group`.isSystemNotification,
+                `group`.isDisplayNotification, 
+                `user`.isPasswordChangeRequired,
+                `user`.twoFactorTypeId,
+                `user`.twoFactorSecret,
+                `user`.twoFactorRecoveryCodes,
+                `user`.showContentFrom
             ';
-        }
-
-        if (DBVERSION >= 88) {
-            $select .= '
-                ,
-                IFNULL(group.libraryQuota, 0) AS libraryQuota
-            ';
-        }
-
-        if (DBVERSION >= 124) {
-            $select .= '
-                ,
-                `group`.isSystemNotification
-            ';
-        }
-
-        if (DBVERSION >= 134) {
-            $select .= '
-                ,
-                `group`.isDisplayNotification
-            ';
-        }
-
-        if (DBVERSION >= 143) {
-            $select .= '
-                , `user`.isPasswordChangeRequired
-            ';
-        }
 
         $body = '
               FROM `user`
@@ -275,16 +253,8 @@ class UserFactory extends BaseFactory
                 INNER JOIN `group`
                 ON `group`.groupId = lkusergroup.groupId
                   AND isUserSpecific = 1
-        ';
-
-        if (DBVERSION >= 120) {
-            $body .= '
                 LEFT OUTER JOIN `pages`
                 ON pages.pageId = `user`.homePageId
-            ';
-        }
-
-        $body .= '
              WHERE 1 = 1
          ';
 
@@ -325,7 +295,7 @@ class UserFactory extends BaseFactory
         // Groups Provided
         $groups = $this->getSanitizer()->getParam('groupIds', $filterBy);
 
-        if (count($groups) > 0) {
+        if ($groups !== null && count($groups) > 0) {
             $body .= ' AND user.userId IN (SELECT userId FROM `lkusergroup` WHERE groupId IN (' . implode($groups, ',') . ')) ';
         }
 
@@ -342,28 +312,8 @@ class UserFactory extends BaseFactory
         }
 
         if ($this->getSanitizer()->getString('userName', $filterBy) != null) {
-            // Convert into commas
-            foreach (explode(',', $this->getSanitizer()->getString('userName', $filterBy)) as $term) {
-
-                if (empty(trim($term)))
-                    continue;
-
-                // convert into a space delimited array
-                $names = explode(' ', $term);
-
-                $i = 0;
-                foreach ($names as $searchName) {
-                    $i++;
-                    // Not like, or like?
-                    if (substr($searchName, 0, 1) == '-') {
-                        $body .= " AND `user`.userName NOT RLIKE (:userName$i) ";
-                        $params['userName' . $i] = ltrim(($searchName), '-');
-                    } else {
-                        $body .= " AND `user`.userName RLIKE (:userName$i) ";
-                        $params['userName' . $i] = $searchName;
-                    }
-                }
-            }
+            $terms = explode(',', $this->getSanitizer()->getString('userName', $filterBy));
+            $this->nameFilter('user', 'userName', $terms, $body, $params);
         }
 
         // Email Provided

@@ -61,7 +61,6 @@ class TwitterMetro extends TwitterBase
             $module->type = 'twittermetro';
             $module->class = 'Xibo\Widget\TwitterMetro';
             $module->description = 'Twitter Metro Search Module';
-            $module->imageUri = 'forms/library.gif';
             $module->enabled = 1;
             $module->previewEnabled = 1;
             $module->assignable = 1;
@@ -70,6 +69,7 @@ class TwitterMetro extends TwitterBase
             $module->schemaVersion = $this->codeSchemaVersion;
             $module->defaultDuration = 60;
             $module->settings = [];
+            $module->installName = 'twittermetro';
 
             $this->setModule($module);
             $this->installModule();
@@ -114,12 +114,12 @@ class TwitterMetro extends TwitterBase
     }
     
     /**
-     * @return string
+     * Javascript functions for the layout designer
      */
     public function layoutDesignerJavaScript()
     {
         // We use the same javascript as the data set view designer
-        return 'twittermetro-form-javascript';
+        return 'twittermetro-designer-javascript';
     }
     
     /**
@@ -168,17 +168,18 @@ class TwitterMetro extends TwitterBase
     }
 
     /**
-     * Adds a Twitter Metro Widget
-     * @SWG\Post(
-     *  path="/playlist/widget/twittermetro/{playlistId}",
-     *  operationId="WidgetTwitterMetroAdd",
+     * Edit Twitter Metro
+     *
+     * @SWG\Put(
+     *  path="/playlist/widget/{widgetId}?twitterMetro",
+     *  operationId="WidgetTwitterMetroEdit",
      *  tags={"widget"},
-     *  summary="Add a Twitter Metro Widget",
-     *  description="Add a new Twitter Metro Widget to the specified playlist",
+     *  summary="Edit a Twitter Metro Widget",
+     *  description="Edit a Twitter Metro Widget. This call will replace existing Widget object, all not supplied parameters will be set to default.",
      *  @SWG\Parameter(
-     *      name="playlistId",
+     *      name="widgetId",
      *      in="path",
-     *      description="The playlist ID to add a Twitter Metro widget",
+     *      description="The WidgetId to Edit",
      *      type="integer",
      *      required=true
      *   ),
@@ -203,6 +204,13 @@ class TwitterMetro extends TwitterBase
      *      type="integer",
      *      required=false
      *  ),
+     *  @SWG\Parameter(
+     *      name="enableStat",
+     *      in="formData",
+     *      description="The option (On, Off, Inherit) to enable the collection of Widget Proof of Play statistics",
+     *      type="string",
+     *      required=false
+     *   ),
      *  @SWG\Parameter(
      *      name="searchTerm",
      *      in="formData",
@@ -338,45 +346,18 @@ class TwitterMetro extends TwitterBase
      *   ),
      *  @SWG\Response(
      *      response=201,
-     *      description="successful operation",
-     *      @SWG\Schema(ref="#/definitions/Widget"),
-     *      @SWG\Header(
-     *          header="Location",
-     *          description="Location of the new widget",
-     *          type="string"
-     *      )
+     *      description="successful operation"
      *  )
      * )
-     */
-    public function add()
-    {
-        $this->setCommonOptions();
-
-        // Save the widget
-        $this->validate();
-        $this->saveWidget();
-    }
-
-    /**
-     * Edit Media
+     *
+     * @throws \Xibo\Exception\XiboException
      */
     public function edit()
-    {
-        $this->setCommonOptions();
-
-        // Save the widget
-        $this->validate();
-        $this->saveWidget();
-    }
-
-    /**
-     * Set common options from Request Params
-     */
-    private function setCommonOptions()
     {
         $this->setDuration($this->getSanitizer()->getInt('duration', $this->getDuration()));
         $this->setUseDuration($this->getSanitizer()->getCheckbox('useDuration'));
         $this->setOption('name', $this->getSanitizer()->getString('name'));
+        $this->setOption('enableStat', $this->getSanitizer()->getString('enableStat'));
         $this->setOption('searchTerm', $this->getSanitizer()->getString('searchTerm'));
         $this->setOption('language', $this->getSanitizer()->getString('language'));
         $this->setOption('effect', $this->getSanitizer()->getString('effect'));
@@ -395,9 +376,8 @@ class TwitterMetro extends TwitterBase
         $this->setOption('colorTemplateId', $this->getSanitizer()->getString('colorTemplateId'));
         $this->setOption('resultContent', $this->getSanitizer()->getString('resultContent'));
         $this->setOption('removeRetweets', $this->getSanitizer()->getCheckbox('removeRetweets'));
-        
-        if( $this->getOption('overrideColorTemplate') == 1 ){
-            
+
+        if ($this->getOption('overrideColorTemplate') == 1) {
             // Convert the colors array to string to be able to save it
             $stringColor = $this->getSanitizer()->getStringArray('color')[0];
             for ($i=1; $i < count($this->getSanitizer()->getStringArray('color')); $i++) {
@@ -406,6 +386,10 @@ class TwitterMetro extends TwitterBase
             }
             $this->setOption('templateColours', $stringColor);
         }
+
+        // Save the widget
+        $this->validate();
+        $this->saveWidget();
     }
 
     /**
@@ -430,8 +414,8 @@ class TwitterMetro extends TwitterBase
                 $defaultLat = $display->latitude;
                 $defaultLong = $display->longitude;
             } else {
-                $defaultLat = $this->getConfig()->GetSetting('DEFAULT_LAT');
-                $defaultLong = $this->getConfig()->GetSetting('DEFAULT_LONG');
+                $defaultLat = $this->getConfig()->getSetting('DEFAULT_LAT');
+                $defaultLong = $this->getConfig()->getSetting('DEFAULT_LONG');
             }
 
             // Built the geoCode string.
@@ -538,7 +522,7 @@ class TwitterMetro extends TwitterBase
         $emoji->imagePathPNG = $this->getResourceUrl('emojione/emojione.sprites.png');
 
         // Get the date format to apply
-        $dateFormat = $this->getOption('dateFormat', $this->getConfig()->GetSetting('DATE_FORMAT'));
+        $dateFormat = $this->getOption('dateFormat', $this->getConfig()->getSetting('DATE_FORMAT'));
 
         // This should return the formatted items.
         foreach ($data->statuses as $tweet) {
@@ -716,12 +700,7 @@ class TwitterMetro extends TwitterBase
         return $return;
     }
 
-    /**
-     * Get Resource
-     * @param int $displayId
-     * @return mixed
-     * @throws XiboException
-     */
+    /** @inheritdoc */
     public function getResource($displayId = 0)
     {
         // Make sure we are set up correctly
@@ -758,9 +737,6 @@ class TwitterMetro extends TwitterBase
             'numItems' => count($items),
             'originalWidth' => $this->region->width,
             'originalHeight' => $this->region->height,
-            'previewWidth' => $this->getSanitizer()->getDouble('width', 0),
-            'previewHeight' => $this->getSanitizer()->getDouble('height', 0),
-            'scaleOverride' => $this->getSanitizer()->getDouble('scale_override', 0),
             'widgetDesignWidth' => $templateData['originalWidth'],
             'widgetDesignHeight'=> $templateData['originalHeight'],
             'resultContent'=> $this->getSanitizer()->string($this->getOption('resultContent'))            
@@ -783,7 +759,7 @@ class TwitterMetro extends TwitterBase
         if ($backgroundColor != '') {
             $headContent .= '<style type="text/css">body { background-color: ' . $backgroundColor . ' }</style>';
         } else {
-          $headContent .= '<style type="text/css"> body { background-color: transparent }</style>';
+            $headContent .= '<style type="text/css"> body { background-color: transparent }</style>';
         }
         
         // Add the CSS if it isn't empty
@@ -838,11 +814,7 @@ class TwitterMetro extends TwitterBase
     /** @inheritdoc */
     public function isValid()
     {
-        // Using the information you have in your module calculate whether it is valid or not.
-        // 0 = Invalid
-        // 1 = Valid
-        // 2 = Unknown
-        return 1;
+        return self::$STATUS_VALID;
     }
 
     /**
@@ -875,6 +847,12 @@ class TwitterMetro extends TwitterBase
             // Non-display specific
             return $this->getWidgetId() . (($displayId === 0) ? '_0' : '');
         }
+    }
+
+    /** @inheritdoc */
+    public function isCacheDisplaySpecific()
+    {
+        return ($this->getOption('tweetDistance', 0) > 0);
     }
 
     /** @inheritdoc */

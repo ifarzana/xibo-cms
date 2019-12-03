@@ -1,11 +1,24 @@
 <?php
-/*
- * Spring Signage Ltd - http://www.springsignage.com
- * Copyright (C) 2015 Spring Signage Ltd
- * (Schedule.php)
+/**
+ * Copyright (C) 2019 Xibo Signage Ltd
+ *
+ * Xibo - Digital Signage - http://www.xibo.org.uk
+ *
+ * This file is part of Xibo.
+ *
+ * Xibo is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * any later version.
+ *
+ * Xibo is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with Xibo.  If not, see <http://www.gnu.org/licenses/>.
  */
-
-
 namespace Xibo\Entity;
 
 use Jenssegers\Date\Date;
@@ -13,10 +26,14 @@ use Respect\Validation\Validator as v;
 use Stash\Interfaces\PoolInterface;
 use Xibo\Exception\ConfigurationException;
 use Xibo\Exception\InvalidArgumentException;
+use Xibo\Exception\NotFoundException;
 use Xibo\Exception\XiboException;
+use Xibo\Factory\CampaignFactory;
 use Xibo\Factory\DayPartFactory;
 use Xibo\Factory\DisplayFactory;
 use Xibo\Factory\DisplayGroupFactory;
+use Xibo\Factory\ScheduleReminderFactory;
+use Xibo\Factory\UserFactory;
 use Xibo\Service\ConfigServiceInterface;
 use Xibo\Service\DateServiceInterface;
 use Xibo\Service\LogServiceInterface;
@@ -35,6 +52,7 @@ class Schedule implements \JsonSerializable
     public static $LAYOUT_EVENT = 1;
     public static $COMMAND_EVENT = 2;
     public static $OVERLAY_EVENT = 3;
+    public static $INTERRUPT_EVENT = 4;
     public static $DATE_MIN = 0;
     public static $DATE_MAX = 2147483647;
 
@@ -79,6 +97,16 @@ class Schedule implements \JsonSerializable
      * @var DisplayGroup[]
      */
     public $displayGroups = [];
+
+    /**
+     * @SWG\Property(
+     *  description="Schedule Reminders assigned to this Scheduled Event.",
+     *  type="array",
+     *  @SWG\Items(ref="#/definitions/ScheduleReminder")
+     * )
+     * @var ScheduleReminder[]
+     */
+    public $scheduleReminders = [];
 
     /**
      * @SWG\Property(
@@ -152,6 +180,12 @@ class Schedule implements \JsonSerializable
     public $recurrenceRepeatsOn;
 
     /**
+     * @SWG\Property(description="Recurrence monthly repeats on - 0 is day of month, 1 is weekday of week")
+     * @var int
+     */
+    public $recurrenceMonthlyRepeatsOn;
+
+    /**
      * @SWG\Property(
      *  description="The Campaign/Layout Name",
      *  readOnly=true
@@ -196,10 +230,22 @@ class Schedule implements \JsonSerializable
     public $lastRecurrenceWatermark;
 
     /**
+     * @SWG\Property(description="Flag indicating whether the event should be synchronised across displays")
+     * @var int
+     */
+    public $syncEvent = 0;
+
+    /**
      * @SWG\Property(description="Flag indicating whether the event will sync to the Display timezone")
      * @var int
      */
     public $syncTimezone;
+
+    /**
+     * @SWG\Property(description="Percentage (0-100) of each full hour that is scheduled that this Layout should occupy")
+     * @var int
+     */
+    public $shareOfVoice;
 
     /**
      * @var ScheduleEvent[]
@@ -228,6 +274,17 @@ class Schedule implements \JsonSerializable
     /** @var  DayPartFactory */
     private $dayPartFactory;
 
+    /** @var  CampaignFactory */
+    private $campaignFactory;
+
+    /** @var  ScheduleReminderFactory */
+    private $scheduleReminderFactory;
+
+    /**
+     * @var UserFactory
+     */
+    private $userFactory;
+
     /**
      * Entity constructor.
      * @param StorageServiceInterface $store
@@ -237,8 +294,10 @@ class Schedule implements \JsonSerializable
      * @param DateServiceInterface $date
      * @param DisplayGroupFactory $displayGroupFactory
      * @param DayPartFactory $dayPartFactory
+     * @param UserFactory $userFactory
+     * @param ScheduleReminderFactory $scheduleReminderFactory
      */
-    public function __construct($store, $log, $config, $pool, $date, $displayGroupFactory, $dayPartFactory)
+    public function __construct($store, $log, $config, $pool, $date, $displayGroupFactory, $dayPartFactory, $userFactory, $scheduleReminderFactory)
     {
         $this->setCommonDependencies($store, $log);
         $this->config = $config;
@@ -246,8 +305,20 @@ class Schedule implements \JsonSerializable
         $this->dateService = $date;
         $this->displayGroupFactory = $displayGroupFactory;
         $this->dayPartFactory = $dayPartFactory;
+        $this->userFactory = $userFactory;
+        $this->scheduleReminderFactory = $scheduleReminderFactory;
 
         $this->excludeProperty('lastRecurrenceWatermark');
+    }
+
+    /**
+     * @param CampaignFactory $campaignFactory
+     * @return $this
+     */
+    public function setCampaignFactory($campaignFactory)
+    {
+        $this->campaignFactory = $campaignFactory;
+        return $this;
     }
 
     public function __clone()
@@ -326,7 +397,7 @@ class Schedule implements \JsonSerializable
         // From Date and To Date are in UNIX format
         $currentDate = $this->getDate()->parse();
         $rfLookAhead = clone $currentDate;
-        $rfLookAhead->addSeconds(intval($this->config->GetSetting('REQUIRED_FILES_LOOKAHEAD')));
+        $rfLookAhead->addSeconds(intval($this->config->getSetting('REQUIRED_FILES_LOOKAHEAD')));
 
         // Dial current date back to the start of the day
         $currentDate->startOfDay();
@@ -356,13 +427,22 @@ class Schedule implements \JsonSerializable
     /**
      * Load
      */
-    public function load()
+    public function load($options = [])
     {
+        $options = array_merge([
+            'loadScheduleReminders' => false
+        ], $options);
+
         // If we are already loaded, then don't do it again
         if ($this->loaded || $this->eventId == null || $this->eventId == 0)
             return;
 
         $this->displayGroups = $this->displayGroupFactory->getByEventId($this->eventId);
+
+        // Load schedule reminders
+        if ($options['loadScheduleReminders']) {
+            $this->scheduleReminders = $this->scheduleReminderFactory->query(null, ['eventId'=> $this->eventId]);
+        }
 
         // We are fully loaded
         $this->loaded = true;
@@ -403,12 +483,19 @@ class Schedule implements \JsonSerializable
      */
     public function validate()
     {
-        if (count($this->displayGroups) <= 0)
+        if (count($this->displayGroups) <= 0) {
             throw new InvalidArgumentException(__('No display groups selected'), 'displayGroups');
+        }
 
-        $this->getLog()->debug('EventTypeId: %d. DayPartId: %d, CampaignId: %d, CommandId: %d', $this->eventTypeId, $this->dayPartId, $this->campaignId, $this->commandId);
+        $this->getLog()->debug('EventTypeId: ' . $this->eventTypeId
+            . '. DayPartId: ' . $this->dayPartId
+            . ', CampaignId: ' . $this->campaignId
+            . ', CommandId: ' . $this->commandId);
 
-        if ($this->eventTypeId == Schedule::$LAYOUT_EVENT || $this->eventTypeId == Schedule::$OVERLAY_EVENT) {
+        if ($this->eventTypeId == Schedule::$LAYOUT_EVENT
+            || $this->eventTypeId == Schedule::$OVERLAY_EVENT
+            || $this->eventTypeId == Schedule::$INTERRUPT_EVENT
+        ) {
             // Validate layout
             if (!v::intType()->notEmpty()->validate($this->campaignId))
                 throw new InvalidArgumentException(__('Please select a Campaign/Layout for this event.'), 'campaignId');
@@ -420,6 +507,15 @@ class Schedule implements \JsonSerializable
             }
 
             $this->commandId = null;
+
+            // additional validation for Interrupt Layout event type
+            if ($this->eventTypeId == Schedule::$INTERRUPT_EVENT) {
+
+                if (!v::intType()->notEmpty()->validate($this->shareOfVoice) || !v::min(0)->validate($this->shareOfVoice)
+                    || !v::max(100)->validate($this->shareOfVoice)) {
+                    throw new InvalidArgumentException(__('Share of Voice must be a whole number between 0 and 100'), 'shareOfVoice');
+                }
+            }
 
         } else if ($this->eventTypeId == Schedule::$COMMAND_EVENT) {
             // Validate command
@@ -449,6 +545,37 @@ class Schedule implements \JsonSerializable
         // Check recurrenceDetail every is positive
         if ($this->recurrenceType != '' && ($this->recurrenceDetail === null || $this->recurrenceDetail <= 0))
             throw new InvalidArgumentException(__('Repeat every must be a positive number'), 'recurrenceDetail');
+        
+        // Check and disallow Minute/Hourly repeats to be indefinite (or too long)
+        $twelveHoursInSeconds = 12 * 60 * 60;
+        $oneWeekInSeconds = 24 * 7 * 60 * 60;
+        if($this->recurrenceType == 'Minute') {
+
+            if (empty($this->recurrenceRange)) {
+                throw new InvalidArgumentException(__(' An end time is needed for an event that has its repeating interval set to Minute.'), 'recurrenceRange');
+            }
+
+            $distance = ($this->getDate()->parse($this->recurrenceRange, 'U')->diffInSeconds($this->getDate()->parse($this->fromDt, 'U'))) / $this->recurrenceDetail;
+
+            if ($distance > $twelveHoursInSeconds) {
+                // Recurrence range cannot be more than 12 hours
+                $exceedLimit = $this->getDate()->parse($this->fromDt, 'U')->addSeconds($twelveHoursInSeconds * $this->recurrenceDetail );
+                throw new InvalidArgumentException(sprintf(__('The end time for this event can only be %s in the future because of the repeating interval being Minute.', $exceedLimit->format('Y-m-d H:i:s'))), 'recurrenceRange');
+            }
+
+        } elseif ($this->recurrenceType == 'Hour') {
+
+            if (empty($this->recurrenceRange)) {
+                throw new InvalidArgumentException(__(' An end time is needed for an event that has its repeating interval set to Hour'), 'recurrenceRange');
+            }
+            $distance = ($this->getDate()->parse($this->recurrenceRange, 'U')->diffInSeconds($this->getDate()->parse($this->fromDt, 'U'))) / $this->recurrenceDetail;
+
+            if ($distance > $oneWeekInSeconds) {
+                // Recurrence range cannot be more than 1 week
+                $exceedLimit = $this->getDate()->parse($this->fromDt, 'U')->addSeconds($oneWeekInSeconds * $this->recurrenceDetail );
+                throw new InvalidArgumentException(sprintf(__('The end time for this event can only be %s in the future because of the repeating interval being Hour.', $exceedLimit->format('Y-m-d H:i:s'))), 'recurrenceRange');
+            }
+        }
     }
 
     /**
@@ -532,6 +659,16 @@ class Schedule implements \JsonSerializable
         $this->displayGroups = [];
         $this->unlinkDisplayGroups();
 
+
+        // Delete schedule reminders
+        if ($this->scheduleReminderFactory !== null) {
+            $scheduleReminders = $this->scheduleReminderFactory->query(null, ['eventId' => $this->eventId]);
+
+            foreach ($scheduleReminders as $reminder) {
+                $reminder->delete();
+            }
+        }
+
         // Delete the event itself
         $this->getStore()->update('DELETE FROM `schedule` WHERE eventId = :eventId', ['eventId' => $this->eventId]);
 
@@ -560,8 +697,8 @@ class Schedule implements \JsonSerializable
     private function add()
     {
         $this->eventId = $this->getStore()->insert('
-          INSERT INTO `schedule` (eventTypeId, CampaignId, commandId, userID, is_priority, FromDT, ToDT, DisplayOrder, recurrence_type, recurrence_detail, recurrence_range, `recurrenceRepeatsOn`, `dayPartId`, `syncTimezone`)
-            VALUES (:eventTypeId, :campaignId, :commandId, :userId, :isPriority, :fromDt, :toDt, :displayOrder, :recurrenceType, :recurrenceDetail, :recurrenceRange, :recurrenceRepeatsOn, :dayPartId, :syncTimezone)
+          INSERT INTO `schedule` (eventTypeId, CampaignId, commandId, userID, is_priority, FromDT, ToDT, DisplayOrder, recurrence_type, recurrence_detail, recurrence_range, `recurrenceRepeatsOn`, `recurrenceMonthlyRepeatsOn`, `dayPartId`, `syncTimezone`, `syncEvent`, `shareOfVoice`)
+            VALUES (:eventTypeId, :campaignId, :commandId, :userId, :isPriority, :fromDt, :toDt, :displayOrder, :recurrenceType, :recurrenceDetail, :recurrenceRange, :recurrenceRepeatsOn, :recurrenceMonthlyRepeatsOn, :dayPartId, :syncTimezone, :syncEvent, :shareOfVoice)
         ', [
             'eventTypeId' => $this->eventTypeId,
             'campaignId' => $this->campaignId,
@@ -575,8 +712,11 @@ class Schedule implements \JsonSerializable
             'recurrenceDetail' => $this->recurrenceDetail,
             'recurrenceRange' => $this->recurrenceRange,
             'recurrenceRepeatsOn' => $this->recurrenceRepeatsOn,
+            'recurrenceMonthlyRepeatsOn' => ($this->recurrenceMonthlyRepeatsOn == null) ? 0 : $this->recurrenceMonthlyRepeatsOn,
             'dayPartId' => $this->dayPartId,
-            'syncTimezone' => $this->syncTimezone
+            'syncTimezone' => $this->syncTimezone,
+            'syncEvent' => $this->syncEvent,
+            'shareOfVoice' => $this->shareOfVoice
         ]);
     }
 
@@ -599,8 +739,11 @@ class Schedule implements \JsonSerializable
             recurrence_detail = :recurrenceDetail,
             recurrence_range = :recurrenceRange,
             `recurrenceRepeatsOn` = :recurrenceRepeatsOn,
+            `recurrenceMonthlyRepeatsOn` = :recurrenceMonthlyRepeatsOn,
             `dayPartId` = :dayPartId,
-            `syncTimezone` = :syncTimezone
+            `syncTimezone` = :syncTimezone,
+            `syncEvent` = :syncEvent,
+            `shareOfVoice` = :shareOfVoice
           WHERE eventId = :eventId
         ', [
             'eventTypeId' => $this->eventTypeId,
@@ -615,8 +758,11 @@ class Schedule implements \JsonSerializable
             'recurrenceDetail' => $this->recurrenceDetail,
             'recurrenceRange' => $this->recurrenceRange,
             'recurrenceRepeatsOn' => $this->recurrenceRepeatsOn,
+            'recurrenceMonthlyRepeatsOn' => $this->recurrenceMonthlyRepeatsOn,
             'dayPartId' => $this->dayPartId,
             'syncTimezone' => $this->syncTimezone,
+            'syncEvent' => $this->syncEvent,
+            'shareOfVoice' => $this->shareOfVoice,
             'eventId' => $this->eventId
         ]);
     }
@@ -630,6 +776,13 @@ class Schedule implements \JsonSerializable
      */
     public function getEvents($fromDt, $toDt)
     {
+        // Events scheduled "always" will return one event
+        if ($this->isAlwaysDayPart()) {
+            // Create events with min/max dates
+            $this->addDetail(Schedule::$DATE_MIN, Schedule::$DATE_MAX);
+            return $this->scheduleEvents;
+        }
+
         // Copy the dates as we are going to be operating on them.
         $fromDt = $fromDt->copy();
         $toDt = $toDt->copy();
@@ -657,11 +810,32 @@ class Schedule implements \JsonSerializable
             $toDt->addMonth();
         }
 
+        // Load the dates into a date object for parsing
+        $eventStart = $this->getDate()->parse($this->fromDt, 'U');
+        $eventEnd = ($this->toDt == null) ? $eventStart->copy() : $this->getDate()->parse($this->toDt, 'U');
+
+        // Does the original event go over the month boundary?
+        if ($eventStart->month !== $eventEnd->month) {
+            // We expect some residual events to spill out into the month we are generating
+            // wind back the generate from date
+            $fromDt->subMonth();
+
+            $this->getLog()->debug('Expecting events from the prior month to spill over into this one, pulled back the generate from dt to ' . $fromDt->toRssString());
+        } else {
+            $this->getLog()->debug('The main event has a start and end date within the month, no need to pull it in from the prior month. [eventId:' . $this->eventId . ']');
+        }
+
         // Request month cache
         while ($fromDt < $toDt) {
-            $this->generateMonth($fromDt);
 
-            $this->getLog()->debug('Events: ' . json_encode($this->scheduleEvents, JSON_PRETTY_PRINT));
+            // Empty scheduleEvents as we are looping thorugh each month
+            // we dont want to save previous month events
+            $this->scheduleEvents = [];
+
+            // Events for the month.
+            $this->generateMonth($fromDt, $eventStart, $eventEnd);
+
+            $this->getLog()->debug('Filtering Events: ' . json_encode($this->scheduleEvents, JSON_PRETTY_PRINT) . '. fromTimeStamp: ' . $fromTimeStamp . ', toTimeStamp: ' . $toTimeStamp);
 
             foreach ($this->scheduleEvents as $scheduleEvent) {
 
@@ -681,7 +855,7 @@ class Schedule implements \JsonSerializable
             $fromDt->addMonth();
         }
 
-        $this->getLog()->debug('Filtered ' . count($this->scheduleEvents) . ' to ' . count($events));
+        $this->getLog()->debug('Filtered ' . count($this->scheduleEvents) . ' to ' . count($events) . ', events: ' . json_encode($events, JSON_PRETTY_PRINT));
 
         return $events;
     }
@@ -689,11 +863,13 @@ class Schedule implements \JsonSerializable
     /**
      * Generate Instances
      * @param Date $generateFromDt
+     * @param Date $start
+     * @param Date $end
      * @throws XiboException
      */
-    private function generateMonth($generateFromDt)
+    private function generateMonth($generateFromDt, $start, $end)
     {
-        $generateFromDt->startOfMonth();
+        $generateFromDt->copy()->startOfMonth();
         $generateToDt = $generateFromDt->copy()->addMonth();
 
         $this->getLog()->debug('Request for schedule events on eventId ' . $this->eventId
@@ -702,17 +878,6 @@ class Schedule implements \JsonSerializable
             . ' [eventId:' . $this->eventId . ']'
         );
 
-        // Events scheduled "always" will return one event
-        if ($this->isAlwaysDayPart()) {
-            // Create events with min/max dates
-            $this->addDetail(Schedule::$DATE_MIN, Schedule::$DATE_MAX);
-            return;
-        }
-
-        // Load the dates into a date object for parsing
-        $start = $this->getDate()->parse($this->fromDt, 'U');
-        $end = ($this->toDt == null) ? $start->copy() : $this->getDate()->parse($this->toDt, 'U');
-
         // If we are a daypart event, look up the start/end times for the event
         $this->calculateDayPartTimes($start, $end);
 
@@ -720,8 +885,6 @@ class Schedule implements \JsonSerializable
         if ($start <= $generateToDt && $end > $generateFromDt) {
             // Add the detail for the main event (this is the event that originally triggered the generation)
             $this->addDetail($start->format('U'), $end->format('U'));
-        } else {
-            $this->getLog()->debug('Main event is not in the current generation window. [eventId:' . $this->eventId . ']');
         }
 
         // If we don't have any recurrence, we are done
@@ -749,6 +912,7 @@ class Schedule implements \JsonSerializable
         // if the last watermark is after the from window, then we need to walk from the beginning
 
         // Handle recurrence
+        $originalStart = $start->copy();
         $lastWatermark = ($this->lastRecurrenceWatermark != 0) ? $this->getDate()->parse($this->lastRecurrenceWatermark, 'U') : $this->getDate()->parse(self::$DATE_MIN, 'U');
 
         $this->getLog()->debug('Recurrence calculation required - last water mark is set to: ' . $lastWatermark->toRssString() . '. Event dates: ' . $start->toRssString() . ' - ' . $end->toRssString() . ' [eventId:' . $this->eventId . ']');
@@ -765,6 +929,11 @@ class Schedule implements \JsonSerializable
             /** @var Date $start */
             $start = $lastWatermark->copy();
             $end = $start->copy()->addSeconds($eventDuration);
+
+            if ($start <= $generateToDt && $end >= $generateFromDt) {
+                $this->addDetail($start->format('U'), $end->format('U'));
+                $this->getLog()->debug('The event start/end is inside the month' );
+            }
         }
 
         // range should be the smallest of the recurrence range and the generate window todt
@@ -879,8 +1048,25 @@ class Schedule implements \JsonSerializable
                     break;
 
                 case 'Month':
-                    $start->month($start->month + $this->recurrenceDetail);
-                    $end->month($end->month + $this->recurrenceDetail);
+                    // Are we repeating on the day of the month, or the day of the week
+                    if ($this->recurrenceMonthlyRepeatsOn == 1) {
+                        // Week day repeat
+                        $difference = $end->diffInSeconds($start);
+
+                        // Work out the position in the month of this day and the ordinal
+                        $ordinals = ['first', 'second', 'third', 'fourth', 'fifth', 'sixth', 'seventh'];
+                        $ordinal = $ordinals[ceil($originalStart->day / 7) - 1];
+                        $start->month($start->month + $this->recurrenceDetail)->modify($ordinal . ' ' . $originalStart->format('l') . ' of ' . $start->format('F Y'))->setTimeFrom($originalStart);
+
+                        $this->getLog()->debug('Setting start to: ' . $ordinal . ' ' . $start->format('l') . ' of ' . $start->format('F Y'));
+
+                        // Base the end on the start + difference
+                        $end = $start->copy()->addSeconds($difference);
+                    } else {
+                        // Day repeat
+                        $start->month($start->month + $this->recurrenceDetail);
+                        $end->month($end->month + $this->recurrenceDetail);
+                    }
                     break;
 
                 case 'Year':
@@ -905,7 +1091,7 @@ class Schedule implements \JsonSerializable
             if ($this->recurrenceType == 'Week' && !empty($this->recurrenceRepeatsOn))
                 continue;
 
-            if ($start >= $generateFromDt) {
+            if ($start <= $generateToDt && $end >= $generateFromDt) {
                 if ($this->eventTypeId == self::$COMMAND_EVENT)
                     $this->addDetail($start->format('U'), null);
                 else {
@@ -1085,5 +1271,132 @@ class Schedule implements \JsonSerializable
         $dayPart = $this->dayPartFactory->getById($this->dayPartId);
 
         return $dayPart->isCustom === 1;
+    }
+
+    /**
+     * Get next reminder date
+     * @param Date $now
+     * @param ScheduleReminder $reminder
+     * @param int $remindSeconds
+     * @return int|null
+     * @throws NotFoundException
+     * @throws XiboException
+     */
+    public function getNextReminderDate($now, $reminder, $remindSeconds) {
+
+        // Determine toDt so that we don't getEvents which never ends
+        // adding the recurrencedetail at the end (minute/hour/week) to make sure we get at least 2 next events
+        $toDt = $now->copy();
+
+        // For a future event we need to forward now to event fromDt
+        $fromDt = $this->getDate()->parse($this->fromDt, 'U');
+        if ( $fromDt > $toDt ) {
+            $toDt = $fromDt;
+        }
+
+        switch ($this->recurrenceType)
+        {
+
+            case 'Minute':
+                $toDt->minute(($toDt->minute + $this->recurrenceDetail) + $this->recurrenceDetail);
+                break;
+
+            case 'Hour':
+                $toDt->hour(($toDt->hour + $this->recurrenceDetail) + $this->recurrenceDetail);
+                break;
+
+            case 'Day':
+                $toDt->day(($toDt->day + $this->recurrenceDetail) + $this->recurrenceDetail);
+                break;
+
+            case 'Week':
+                $toDt->day(($toDt->day + $this->recurrenceDetail * 7 ) + $this->recurrenceDetail);
+                break;
+
+            case 'Month':
+                $toDt->month(($toDt->month + $this->recurrenceDetail ) + $this->recurrenceDetail);
+                break;
+
+            case 'Year':
+                $toDt->year(($toDt->year + $this->recurrenceDetail ) + $this->recurrenceDetail);
+                break;
+
+            default:
+                throw new InvalidArgumentException('Invalid recurrence type', 'recurrenceType');
+        }
+
+        // toDt is set so that we get two next events from now
+        $scheduleEvents = $this->getEvents($now, $toDt);
+
+        foreach($scheduleEvents as $event) {
+            if ($reminder->option == ScheduleReminder::$OPTION_BEFORE_START) {
+                $reminderDt = $event->fromDt - $remindSeconds;
+                if ($reminderDt >= $now->format('U')) {
+                    return $reminderDt;
+                }
+            } elseif ($reminder->option == ScheduleReminder::$OPTION_AFTER_START) {
+                $reminderDt = $event->fromDt + $remindSeconds;
+                if ($reminderDt >= $now->format('U')) {
+                    return $reminderDt;
+                }
+            } elseif ($reminder->option == ScheduleReminder::$OPTION_BEFORE_END) {
+                $reminderDt = $event->toDt - $remindSeconds;
+                if ($reminderDt >= $now->format('U')) {
+                    return $reminderDt;
+                }
+            } elseif ($reminder->option == ScheduleReminder::$OPTION_AFTER_END) {
+                $reminderDt = $event->toDt + $remindSeconds;
+                if ($reminderDt >= $now->format('U')) {
+                    return $reminderDt;
+                }
+            }
+        }
+
+        // No next event exist
+        throw new NotFoundException('reminderDt not found as next event does not exist');
+    }
+
+    /**
+     * Get event title
+     * @return string
+     * @throws XiboException
+     */
+    public function getEventTitle() {
+
+        // Setting for whether we show Layouts with out permissions
+        $showLayoutName = ($this->config->getSetting('SCHEDULE_SHOW_LAYOUT_NAME') == 1);
+
+        // Load the display groups
+        $this->load();
+
+        $displayGroupList = '';
+
+        if (count($this->displayGroups) >= 0) {
+            $array = array_map(function ($object) {
+                return $object->displayGroup;
+            }, $this->displayGroups);
+            $displayGroupList = implode(', ', $array);
+        }
+
+        $user = $this->userFactory->getById($this->userId);
+
+        // Event Title
+        if ($this->campaignId == 0) {
+            // Command
+            $title = __('%s scheduled on %s', $this->command, $displayGroupList);
+        } else {
+            // Should we show the Layout name, or not (depending on permission)
+            // Make sure we only run the below code if we have to, its quite expensive
+            if (!$showLayoutName && !$user->isSuperAdmin()) {
+                // Campaign
+                $campaign = $this->campaignFactory->getById($this->campaignId);
+
+                if (!$user->checkViewable($campaign))
+                    $this->campaign = __('Private Item');
+            }
+            $title = __('%s scheduled on %s', $this->campaign, $displayGroupList);
+        }
+
+        return $title;
     }
 }

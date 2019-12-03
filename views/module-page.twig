@@ -40,11 +40,10 @@
                                 <th>{% trans "Library Media" %}</th>
                                 <th>{% trans "Default Duration" %}</th>
                                 <th>{% trans "Valid Extensions" %}</th>
-                                <th>{% trans "Image Uri" %}</th>
                                 <th>{% trans "Preview Enabled" %}</th>
                                 <th title="{% trans "Can this module be assigned to a Layout?" %}">{% trans "Assignable" %}</th>
                                 <th>{% trans "Enabled" %}</th>
-                                <th></th>
+                                <th>{% trans "Row Menu" %}</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -62,7 +61,7 @@
         var table = $("#modules").DataTable({ "language": dataTablesLanguage,
             serverSide: true, stateSave: true, stateDuration: 0,
             stateLoadCallback: function (settings, callback) {
-                var data;
+                var data = {};
                 $.ajax({
                     type: "GET",
                     async: false,
@@ -107,7 +106,6 @@
                 { "data": "regionSpecific", "render": dataTableTickCrossInverseColumn },
                 { "data": "defaultDuration" },
                 { "data": "validExtensions" },
-                { "data": "imageUri" },
                 { "data": "previewEnabled", "render": dataTableTickCrossColumn },
                 { "data": "assignable", "render": dataTableTickCrossColumn },
                 { "data": "enabled", "render": dataTableTickCrossColumn },
@@ -120,7 +118,7 @@
 
         table.on('draw', dataTableDraw);
         table.on('processing.dt', dataTableProcessing);
-
+        dataTableAddButtons(table, $('#modules_wrapper').find('.col-sm-6').eq(1));
 
         function installModuleComplete()
         {

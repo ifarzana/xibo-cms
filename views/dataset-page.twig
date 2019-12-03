@@ -23,7 +23,7 @@
             <div class="XiboGrid" id="{{ random() }}">
                 <div class="XiboFilter well">
                     <div class="FilterDiv" id="Filter">
-                        <form class="form-inline">
+                        <form class="form-inline" onsubmit="return false">
                             {% set title %}{% trans "Name" %}{% endset %}
                             {{ inline.input("dataSet", title) }}
                         </form>
@@ -41,7 +41,7 @@
                                 <th>{% trans "Owner" %}</th>
                                 <th>{% trans "Permissions" %}</th>
                                 <th>{% trans "Last Sync" %}</th>
-                                <th></th>
+                                <th>{% trans "Row Menu" %}</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -59,7 +59,7 @@
         var table = $("#datasets").DataTable({ "language": dataTablesLanguage,
             serverSide: true, stateSave: true, stateDuration: 0,
             stateLoadCallback: function (settings, callback) {
-                var data;
+                var data = {};
                 $.ajax({
                     type: "GET",
                     async: false,
@@ -148,7 +148,8 @@
                         trans: {
                             addFiles: "{% trans "Add CSV Files" %}",
                             startUpload: "{% trans "Start upload" %}",
-                            cancelUpload: "{% trans "Cancel upload" %}"
+                            cancelUpload: "{% trans "Cancel upload" %}",
+                            processing: "{% trans "Processing..." %}"
                         },
                         upload: {
                             maxSize: {{ libraryUpload.maxSize }},
@@ -219,24 +220,49 @@
 
                         inputs.filter("input").prop("disabled", true);
                     }).bind('fileuploadstart', function (e, data) {
+
+                        // Show progress data
+                        form.find('.fileupload-progress .progress-extended').show();
+                        form.find('.fileupload-progress .progress-end').hide();
+                        
                         if (form.fileupload("active") <= 0)
                             refreshSessionInterval = setInterval("XiboPing('" + pingUrl + "?refreshSession=true')", 1000 * 60 * 3);
-
+                        
                         return true;
                     }).bind('fileuploaddone', function (e, data) {
                         if (refreshSessionInterval != null && form.fileupload("active") <= 0)
                             clearInterval(refreshSessionInterval);
+                    }).bind('fileuploadprogressall', function (e, data) {
+                        // Hide progress data and show processing
+                        if(data.total > 0 && data.loaded == data.total) {
+                            form.find('.fileupload-progress .progress-extended').hide();
+                            form.find('.fileupload-progress .progress-end').show();
+                        }
+                    }).bind('fileuploadadded fileuploadcompleted fileuploadfinished', function (e, data) {
+                        // Get uploaded and downloaded files and toggle Done button
+                        var filesToUploadCount = form.find('tr.template-upload').length;
+                        var $button = form.parents('.modal:first').find('button[data-bb-handler="main"]');
+
+                        if(filesToUploadCount == 0) {
+                            $button.removeAttr('disabled');
+                        } else {
+                            $button.attr('disabled', 'disabled');
+                        }
                     });
                 });
             });
         });
         table.on('processing.dt', dataTableProcessing);
+        dataTableAddButtons(table, $('#datasets_wrapper').find('.col-sm-6').eq(1));
 
         function dataSetFormOpen(dialog) {
             // Bind the test button
             $(dialog).find("#dataSetRemoteTestButton").on('click', function() {
                 var $form = $(dialog).find("form");
                 XiboRemoteRequest("{{ urlFor("dataSet.test.remote") }}", $form.serializeObject(), function(response) {
+                    if (!$.trim(response.data.entries)) {
+                        response.data = response.message;
+                    }
                     $("#datasetRemoteTestRequestResult").html('<pre style="height: 300px; overflow: scroll">' + JSON.stringify(response.data, null, 3) + '</pre>');
                 });
             });
@@ -326,6 +352,8 @@
                     </div>
                     <!-- The extended global progress information -->
                     <div class="progress-extended">&nbsp;</div>
+                    <!-- Processing info container -->
+                    <div class="progress-end" style="display:none;">{{ trans.processing }}</div>
                 </div>
             </div>
             <div class="row">

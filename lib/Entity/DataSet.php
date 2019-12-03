@@ -132,6 +132,12 @@ class DataSet implements \JsonSerializable
     public $password;
 
     /**
+     * @SWG\Property(description="Comma separated string of custom HTTP headers")
+     * @var string
+     */
+    public $customHeaders;
+
+    /**
      * @SWG\Property(description="Time in seconds this DataSet should fetch new Datas from the remote host")
      * @var int
      */
@@ -365,8 +371,6 @@ class DataSet implements \JsonSerializable
      */
     public function getData($filterBy = [], $options = [])
     {
-        $this->touchLastAccessed();
-
         $start = $this->sanitizer->getInt('start', 0, $filterBy);
         $size = $this->sanitizer->getInt('size', 0, $filterBy);
         $filter = $this->sanitizer->getParam('filter', $filterBy);
@@ -384,7 +388,7 @@ class DataSet implements \JsonSerializable
         // Sanitize the filter options provided
         // Get the Latitude and Longitude ( might be used in a formula )
         if ($displayId == 0) {
-            $displayGeoLocation = "GEOMFROMTEXT('POINT(" . $this->config->GetSetting('DEFAULT_LAT') . " " . $this->config->GetSetting('DEFAULT_LONG') . ")')";
+            $displayGeoLocation = "GEOMFROMTEXT('POINT(" . $this->config->getSetting('DEFAULT_LAT') . " " . $this->config->getSetting('DEFAULT_LONG') . ")')";
         }
         else {
             $displayGeoLocation = '(SELECT GeoLocation FROM `display` WHERE DisplayID = :displayId)';
@@ -514,6 +518,13 @@ class DataSet implements \JsonSerializable
                             // Pull out the column name and date format
                             $details = explode(',', str_replace(')', '', str_replace('$dateFormat(', '', $column->formula)));
 
+                            if (isset($details[2])) {
+                                $language = str_replace(' ', '', $details[2]);
+                            } else {
+                                $language = $this->config->getSetting('DEFAULT_LANGUAGE', 'en_GB');
+                            }
+
+                            $this->date->setLocale($language);
                             $value = $this->date->parse($item[$details[0]])->format($details[1]);
                         }
                     } catch (\Exception $e) {
@@ -692,7 +703,7 @@ class DataSet implements \JsonSerializable
         }
 
         // We've been touched
-        $this->touchLastAccessed();
+        $this->setActive();
 
         // Notify Displays?
         $this->notify();
@@ -730,13 +741,29 @@ class DataSet implements \JsonSerializable
         return $this;
     }
 
-    private function touchLastAccessed()
+    /**
+     * Is this DataSet active currently
+     * @return bool
+     */
+    public function isActive()
     {
-        // Touch this dataSet
-        $dataSetCache = $this->pool->getItem('/dataset/accessed/' . $this->dataSetId);
-        $dataSetCache->set('true');
-        $dataSetCache->expiresAfter(intval($this->config->GetSetting('REQUIRED_FILES_LOOKAHEAD')) * 1.5);
-        $this->pool->saveDeferred($dataSetCache);
+        $cache = $this->pool->getItem('/dataset/accessed/' . $this->dataSetId);
+        return $cache->isHit();
+    }
+
+    /**
+     * Indicate that this DataSet has been accessed recently
+     * @return $this
+     */
+    public function setActive()
+    {
+        $this->getLog()->debug('Setting ' . $this->dataSetId . ' as active');
+
+        $cache = $this->pool->getItem('/dataset/accessed/' . $this->dataSetId);
+        $cache->set('true');
+        $cache->expiresAfter(intval($this->config->getSetting('REQUIRED_FILES_LOOKAHEAD')) * 1.5);
+        $this->pool->saveDeferred($cache);
+        return $this;
     }
 
     /**
@@ -776,6 +803,9 @@ class DataSet implements \JsonSerializable
             $column->delete();
         }
 
+        // Delete any dataSet rss
+        $this->getStore()->update('DELETE FROM `datasetrss` WHERE dataSetId = :dataSetId', ['dataSetId' => $this->dataSetId]);
+
         // Delete the data set
         $this->getStore()->update('DELETE FROM `dataset` WHERE dataSetId = :dataSetId', ['dataSetId' => $this->dataSetId]);
 
@@ -798,8 +828,8 @@ class DataSet implements \JsonSerializable
      */
     private function add()
     {
-        $columns = 'DataSet, Description, UserID, `code`, `isLookup`, `isRemote`';
-        $values = ':dataSet, :description, :userId, :code, :isLookup, :isRemote';
+        $columns = 'DataSet, Description, UserID, `code`, `isLookup`, `isRemote`, `lastDataEdit`, `lastClear`';
+        $values = ':dataSet, :description, :userId, :code, :isLookup, :isRemote, :lastDataEdit, :lastClear';
 
         $params = [
             'dataSet' => $this->dataSet,
@@ -807,13 +837,15 @@ class DataSet implements \JsonSerializable
             'userId' => $this->userId,
             'code' => ($this->code == '') ? null : $this->code,
             'isLookup' => $this->isLookup,
-            'isRemote' => $this->isRemote
+            'isRemote' => $this->isRemote,
+            'lastDataEdit' => 0,
+            'lastClear' => 0
         ];
 
         // Insert the extra columns we expect for a remote DataSet
         if ($this->isRemote === 1) {
-            $columns .= ', `method`, `uri`, `postData`, `authentication`, `username`, `password`, `refreshRate`, `clearRate`, `runsAfter`, `dataRoot`, `lastSync`, `lastClear`, `summarize`, `summarizeField`';
-            $values .= ', :method, :uri, :postData, :authentication, :username, :password, :refreshRate, :clearRate, :runsAfter, :dataRoot, :lastSync, :lastClear, :summarize, :summarizeField';
+            $columns .= ', `method`, `uri`, `postData`, `authentication`, `username`, `password`, `customHeaders`, `refreshRate`, `clearRate`, `runsAfter`, `dataRoot`, `lastSync`, `summarize`, `summarizeField`';
+            $values .= ', :method, :uri, :postData, :authentication, :username, :password, :customHeaders, :refreshRate, :clearRate, :runsAfter, :dataRoot, :lastSync, :summarize, :summarizeField';
 
             $params['method'] = $this->method;
             $params['uri'] = $this->uri;
@@ -821,6 +853,7 @@ class DataSet implements \JsonSerializable
             $params['authentication'] = $this->authentication;
             $params['username'] = $this->username;
             $params['password'] = $this->password;
+            $params['customHeaders'] = $this->customHeaders;
             $params['refreshRate'] = $this->refreshRate;
             $params['clearRate'] = $this->clearRate;
             $params['runsAfter'] = $this->runsAfter;
@@ -828,7 +861,6 @@ class DataSet implements \JsonSerializable
             $params['summarize'] = $this->summarize;
             $params['summarizeField'] = $this->summarizeField;
             $params['lastSync'] = 0;
-            $params['lastClear'] = 0;
         }
 
         // Do the insert
@@ -855,7 +887,7 @@ class DataSet implements \JsonSerializable
         ];
 
         if ($this->isRemote) {
-            $sql .= ', method = :method, uri = :uri, postData = :postData, authentication = :authentication, `username` = :username, `password` = :password, refreshRate = :refreshRate, clearRate = :clearRate, runsAfter = :runsAfter, `dataRoot` = :dataRoot, `summarize` = :summarize, `summarizeField` = :summarizeField ';
+            $sql .= ', method = :method, uri = :uri, postData = :postData, authentication = :authentication, `username` = :username, `password` = :password, `customHeaders` = :customHeaders, refreshRate = :refreshRate, clearRate = :clearRate, runsAfter = :runsAfter, `dataRoot` = :dataRoot, `summarize` = :summarize, `summarizeField` = :summarizeField ';
 
             $params['method'] = $this->method;
             $params['uri'] = $this->uri;
@@ -863,6 +895,7 @@ class DataSet implements \JsonSerializable
             $params['authentication'] = $this->authentication;
             $params['username'] = $this->username;
             $params['password'] = $this->password;
+            $params['customHeaders'] = $this->customHeaders;
             $params['refreshRate'] = $this->refreshRate;
             $params['clearRate'] = $this->clearRate;
             $params['runsAfter'] = $this->runsAfter;
@@ -993,5 +1026,15 @@ class DataSet implements \JsonSerializable
         $this->getStore()->update('DELETE FROM `dataset_' . $this->dataSetId . '` WHERE id = :id', [
             'id' => $rowId
         ]);
+    }
+
+    /**
+     * Copy Row
+     * @param int $dataSetIdSource
+     * @param int $dataSetIdTarget
+     */
+    public function copyRows($dataSetIdSource, $dataSetIdTarget)
+    {
+        $this->getStore()->insert('INSERT INTO `dataset_' . $dataSetIdTarget . '`  SELECT * FROM `dataset_' . $dataSetIdSource . '` ' ,[]);
     }
 }

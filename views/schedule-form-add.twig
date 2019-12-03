@@ -1,8 +1,23 @@
 {#
 /*
- * Spring Signage Ltd - http://www.springsignage.com
- * Copyright (C) 2015 Spring Signage Ltd
- * (${FILE_NAME})
+ * Copyright (C) 2019 Xibo Signage Ltd
+ *
+ * Xibo - Digital Signage - http://www.xibo.org.uk
+ *
+ * This file is part of Xibo.
+ *
+ * Xibo is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * any later version.
+ *
+ * Xibo is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with Xibo.  If not, see <http://www.gnu.org/licenses/>.
  */
 #}
 
@@ -19,7 +34,7 @@
     {% trans "Help" %}, XiboHelpRender("{{ help }}")
     {% trans "Cancel" %}, XiboDialogClose()
     {% trans "Next" %}, XiboDialogApply("#scheduleAddForm")
-    {% trans "Save" %}, $("#scheduleAddForm").submit()
+    {% trans "Save" %}, beforeSubmitScheduleForm($("#scheduleAddForm"))
 {% endblock %}
 
 {% block formHtml %}
@@ -28,6 +43,7 @@
             <ul class="nav nav-tabs" role="tablist">
                 <li class="active"><a href="#general" role="tab" data-toggle="tab"><span>{% trans "General" %}</span></a></li>
                 <li class="repeats"><a href="#repeats" role="tab" data-toggle="tab"><span>{% trans "Repeats" %}</span></a></li>
+                <li class="reminders"><a href="#reminders" role="tab" data-toggle="tab"><span>{% trans "Reminder" %}</span></a></li>
             </ul>
             {% set dayPartMessage %}{% trans "Select the start time for this event" %}{% endset %}
             {% set notDayPartMessage %}{% trans "Start and end time will be defined by the daypart's configuration for this day of the week. Use a repeating schedule to apply this event over multiple days" %}{% endset %}
@@ -40,12 +56,19 @@
                         {% set layoutEventType %}{% trans "Campaign/Layout" %}{% endset %}
                         {% set commandEventType %}{% trans "Command" %}{% endset %}
                         {% set overlayEventType %}{% trans "Overlay Layout" %}{% endset %}
+                        {% set interruptEventType %}{% trans "Interrupt Layout" %}{% endset %}
                         {% set eventTypes = [
-                        {id: 1, label: layoutEventType},
-                        {id: 2, label: commandEventType},
-                        {id: 3, label: overlayEventType}
+                            {id: 1, label: layoutEventType},
+                            {id: 2, label: commandEventType},
+                            {id: 3, label: overlayEventType},
+                            {id: 4, label: interruptEventType}
                         ] %}
                         {{ forms.dropdown("eventTypeId", "single", title, "", eventTypes, "id", "label", helpText) }}
+
+                        <div class="interrupt-control">
+                            {% set message = "Only one Interrupt Layout will show at the same time. If the Schedule for a Player resolves to more than one, then the Interrupt shown will depend on Priority and Display Order."|trans %}
+                            {{ forms.message(message, "alert alert-info") }}
+                        </div>
 
                         {% set title %}{% trans "Display" %}{% endset %}
                         {% set helpText %}{% trans "Please select one or more displays / groups for this event to be shown on." %}{% endset %}
@@ -92,6 +115,10 @@
                         {% set helpText %}{% trans "Please select a Layout or Campaign for this Event to show" %}{% endset %}
                         {{ forms.dropdown("campaignId", "single", title, "", null, "id", "value", helpText, "layout-control", "", "", "", attributes) }}
 
+                        {% set title %}{% trans "Share of Voice" %}{% endset %}
+                        {% set helpText %}{% trans "The percentage of time this Layout should be shown." %}{% endset %}
+                        {{ forms.number("shareOfVoice", title, 0, helpText, "interrupt-control") }}
+
                         <div class="form-group preview-button-container">
                             <div class="col-md-offset-2 col-md-10">
                                 <a id="previewButton" class="btn btn-success" target="_blank" data-url="{{ urlFor("campaign.preview") }}">{% trans "Preview" %} <span class="fa fa-tablet"></span></a>
@@ -105,21 +132,27 @@
 
                         {% set title %}{% trans "Display Order" %}{% endset %}
                         {% set helpText %}{% trans "Please select the order this event should appear in relation to others when there is more than one event scheduled" %}{% endset %}
-                        {{ forms.number("displayOrder", title, "", helpText) }}
+                        {{ forms.number("displayOrder", title, "", helpText, 'displayOrder-control') }}
 
                         {% set title %}{% trans "Priority" %}{% endset %}
                         {% set helpText %}{% trans "Sets the event priority - events with the highest priority play in preference to lower priority events." %}{% endset %}
-                        {{ forms.number("isPriority", title, "", helpText) }}
+                        {{ forms.number("isPriority", title, "", helpText, 'priority-control') }}
 
                         {% set title %}{% trans "Run at CMS Time?" %}{% endset %}
                         {% set helpText %}{% trans "When selected, your event will run according to the timezone set on the CMS, otherwise the event will run at Display local time" %}{% endset %}
                         {{ forms.checkbox("syncTimezone", title, 0, helpText) }}
 
+                        {% if settings.EVENT_SYNC == 1 %}
+                            {% set title %}{% trans "Synchronise this event?" %}{% endset %}
+                            {% set helpText %}{% trans "When selected, all selected players will attempt to synchronise the output (Supported on Android player only)" %}{% endset %}
+                            {{ forms.checkbox("syncEvent", title, 0, helpText, "sync-schedule-control") }}
+                        {% endif %}
+
                     </div>
                     
                     <div class="tab-pane" id="repeats">
                         {% set title %}{% trans "Repeats" %}{% endset %}
-                        {% set helpText %}{% trans "What type of repeat is required?" %}{% endset %}
+                        {% set helpText %}{% trans "Select the type of Repeat required for this Event." %}{% endset %}
                         {% set noneOption %}{% trans "None" %}{% endset %}
                         {% set minute %}{% trans "Per Minute" %}{% endset %}
                         {% set hourly %}{% trans "Hourly" %}{% endset %}
@@ -138,7 +171,7 @@
                         ] %}
                         {{ forms.dropdown("recurrenceType", "single", title, "", options, "id", "name", helpText) }}
 
-                        {% set helpText %}{% trans "Which days of the week does this event repeat?" %}{% endset %}
+                        {% set helpText %}{% trans "Use the drop-down to select which days of the week this Event should be repeated." %}{% endset %}
                         {% set monday %}{% trans "Monday" %}{% endset %}
                         {% set tuesday %}{% trans "Tuesday" %}{% endset %}
                         {% set wednesday %}{% trans "Wednesday" %}{% endset %}
@@ -157,13 +190,26 @@
                         ] %}
                         {{ forms.dropdown("recurrenceRepeatsOn[]", "dropdownmulti", "", event.recurrenceRepeatsOn, options, "id", "name", helpText, "repeat-weekly-control-group") }}
 
+                        {% set helpText %}{% trans "Should this Event Repeat by Day of the month (eg. Monthly on Day 21) or by a Weekday in the month (eg. Monthly on the third Thursday)." %}{% endset %}
+                        {% set attributes = [
+                            { name: "data-trans-day", value: "on the [DAY] day"|trans },
+                            { name: "data-trans-weekday", value: "on the [POSITION] [WEEKDAY]"|trans }
+                        ] %}
+                        {{ forms.dropdown("recurrenceMonthlyRepeatsOn", "single", "", 0, [], "id", "name", helpText, "repeat-monthly-control-group", "", "", "", attributes) }}
+
                         {% set title %}{% trans "Repeat every" %}{% endset %}
-                        {% set helpText %}{% trans "How often does this event repeat?" %}{% endset %}
+                        {% set helpText %}{% trans "Include a number to determine the Repeat frequency required for this Event." %}{% endset %}
                         {{ forms.number("recurrenceDetail", title, recurrenceDetail, helpText, "repeat-control-group") }}
 
                         {% set title %}{% trans "Until" %}{% endset %}
-                        {% set helpText %}{% trans "When should this event stop repeating? Leave empty to repeat forever." %}{% endset %}
+                        {% set helpText %}{% trans "Provide a date and time to end the Repeat for this Event. Leave empty to Repeat indefinitely." %}{% endset %}
                         {{ forms.dateTime("recurrenceRange", title, "", helpText, "repeat-control-group", "", "") }}
+                    </div>
+
+                    <div class="tab-pane" id="reminders">
+                        {% set message %}{% trans "Use the form fields below to create a set of reminders for this event. New fields can be added by clicking on the + icon at the end of the row. Use the tick box to receive a notification by email alternatively reminders will be shown in the message center." %}{% endset %}
+                        {{ forms.message(message) }}
+                        <div id="reminderFields" data-reminders="{{ reminders|json_encode }}"></div>
                     </div>
                 </div>
             </form>

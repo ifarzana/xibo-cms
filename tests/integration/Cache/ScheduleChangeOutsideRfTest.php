@@ -50,11 +50,18 @@ class ScheduleChangeOutsideRfTest extends LocalWebTestCase
         // Create a Layout
         $this->layout = $this->createLayout();
 
-        $response = $this->getEntityProvider()->post('/playlist/widget/text/' . $this->layout->regions[0]->playlists[0]['playlistId'], [
+        // Checkout
+        $layout = $this->getDraft($this->layout);
+
+        $response = $this->getEntityProvider()->post('/playlist/widget/text/' . $layout->regions[0]->regionPlaylist->playlistId);
+        $response = $this->getEntityProvider()->put('/playlist/widget/' . $response['widgetId'], [
             'text' => 'Widget A',
             'duration' => 100,
             'useDuration' => 1
         ]);
+
+        // Check us in again
+        $this->layout = $this->publish($this->layout);
 
         $this->widget = (new XiboText($this->getEntityProvider()))->hydrate($response);
 
@@ -78,6 +85,7 @@ class ScheduleChangeOutsideRfTest extends LocalWebTestCase
             NULL,
             NULL,
             NULL,
+            0,
             0,
             0
         );

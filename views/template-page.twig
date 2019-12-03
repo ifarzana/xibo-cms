@@ -19,8 +19,12 @@
                         <form class="form-inline">
                             {% set title %}{% trans "Name" %}{% endset %}
                             {{ inline.input("template", title) }}
+
                             {% set title %}{% trans "Tags" %}{% endset %}
                             {{ inline.input("tags", title) }}
+
+                            {% set title %}{% trans "Exact match?" %}{% endset %}
+                            {{ inline.checkbox("exactTags", title) }}
                         </form>
                     </div>
                 </div>
@@ -34,7 +38,7 @@
                                 <th>{% trans "Tags" %}</th>
                                 <th>{% trans "Thumbnail" %}</th>
                                 <th>{% trans "Permissions" %}</th>
-                                <th></th>
+                                <th>{% trans "Row Menu" %}</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -52,7 +56,7 @@
         var table = $("#templates").DataTable({ "language": dataTablesLanguage,
             serverSide: true, stateSave: true, stateDuration: 0,
             stateLoadCallback: function (settings, callback) {
-                var data;
+                var data = {};
                 $.ajax({
                     type: "GET",
                     async: false,
@@ -95,9 +99,13 @@
                 { "data": "layout"},
                 { "data": "owner"},
                 { "data": "descriptionWithMarkup"},
-                { "data": "tags", "visible": false },
+                {
+                    "sortable": false,
+                    "visible": false,
+                    "data": dataTableCreateTags
+                },
                 { "data": "thumbnail"},
-                { "data": "permissions"},
+                { "data": "permissions", "sortable": false},
                 {
                     "orderable": false,
                     "data": dataTableButtonsColumn
@@ -106,6 +114,7 @@
         });
 
         table.on('draw', dataTableDraw);
+        table.on('draw', { form: $("#templates").closest(".XiboGrid").find(".FilterDiv form") } ,dataTableCreateTagEvents);
         table.on('processing.dt', dataTableProcessing);
         dataTableAddButtons(table, $('#templates_wrapper').find('.col-sm-6').eq(1));
     </script>

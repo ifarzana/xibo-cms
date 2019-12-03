@@ -17,6 +17,7 @@ use Xibo\Factory\DisplayFactory;
 use Xibo\Factory\DisplayGroupFactory;
 use Xibo\Factory\LayoutFactory;
 use Xibo\Factory\MediaFactory;
+use Xibo\Factory\PlayerVersionFactory;
 use Xibo\Factory\ScheduleFactory;
 use Xibo\Factory\TaskFactory;
 use Xibo\Factory\WidgetFactory;
@@ -56,6 +57,9 @@ class Maintenance extends Base
     /** @var  ScheduleFactory */
     private $scheduleFactory;
 
+    /** @var  PlayerVersionFactory */
+    private $playerVersionFactory;
+
     /**
      * Set common dependencies.
      * @param LogServiceInterface $log
@@ -73,8 +77,9 @@ class Maintenance extends Base
      * @param DisplayGroupFactory $displayGroupFactory
      * @param DisplayFactory $displayFactory
      * @param ScheduleFactory $scheduleFactory
+     * @param PlayerVersionFactory $playerVersionFactory
      */
-    public function __construct($log, $sanitizerService, $state, $user, $help, $date, $config, $store, $taskFactory, $mediaFactory, $layoutFactory, $widgetFactory, $displayGroupFactory, $displayFactory, $scheduleFactory)
+    public function __construct($log, $sanitizerService, $state, $user, $help, $date, $config, $store, $taskFactory, $mediaFactory, $layoutFactory, $widgetFactory, $displayGroupFactory, $displayFactory, $scheduleFactory, $playerVersionFactory)
     {
         $this->setCommonDependencies($log, $sanitizerService, $state, $user, $help, $date, $config);
         $this->taskFactory = $taskFactory;
@@ -85,6 +90,7 @@ class Maintenance extends Base
         $this->displayGroupFactory = $displayGroupFactory;
         $this->displayFactory = $displayFactory;
         $this->scheduleFactory = $scheduleFactory;
+        $this->playerVersionFactory = $playerVersionFactory;
     }
 
     /**
@@ -101,7 +107,7 @@ class Maintenance extends Base
         print '<body>';
 
         // Should the Scheduled Task script be running at all?
-        if ($this->getConfig()->GetSetting("MAINTENANCE_ENABLED")=="Off") {
+        if ($this->getConfig()->getSetting("MAINTENANCE_ENABLED") == "Off") {
             print "<h1>" . __("Maintenance Disabled") . "</h1>";
             print __("Maintenance tasks are disabled at the moment. Please enable them in the &quot;Settings&quot; dialog.");
 
@@ -113,15 +119,15 @@ class Maintenance extends Base
             $aKey = 2;
             $pKey = 3;
 
-            if ($this->getConfig()->GetSetting("MAINTENANCE_ENABLED")=="Protected") {
+            if ($this->getConfig()->getSetting("MAINTENANCE_ENABLED")=="Protected") {
                 // Check that the magic parameter is set
-                $key = $this->getConfig()->GetSetting("MAINTENANCE_KEY");
+                $key = $this->getConfig()->getSetting("MAINTENANCE_KEY");
 
                 // Get key from arguments
                 $pKey = $this->getSanitizer()->getString('key');
             }
 
-            if (($aKey == $key) || ($pKey == $key) || ($this->getConfig()->GetSetting("MAINTENANCE_ENABLED")=="On")) {
+            if (($aKey == $key) || ($pKey == $key) || ($this->getConfig()->getSetting("MAINTENANCE_ENABLED")=="On")) {
 
                 // Are we full maintenance?
                 if (!$quick) {
@@ -193,11 +199,11 @@ class Maintenance extends Base
         $cleanUnusedFiles = $this->getSanitizer()->getCheckbox('cleanUnusedFiles');
         $tidyGenericFiles = $this->getSanitizer()->getCheckbox('tidyGenericFiles');
 
-        if ($this->getConfig()->GetSetting('SETTING_LIBRARY_TIDY_ENABLED') != 1)
+        if ($this->getConfig()->getSetting('SETTING_LIBRARY_TIDY_ENABLED') != 1)
             throw new AccessDeniedException(__('Sorry this function is disabled.'));
 
         // Also run a script to tidy up orphaned media in the library
-        $library = $this->getConfig()->GetSetting('LIBRARY_LOCATION');
+        $library = $this->getConfig()->getSetting('LIBRARY_LOCATION');
         $this->getLog()->debug('Library Location: ' . $library);
 
         // Remove temporary files
@@ -276,7 +282,7 @@ class Maintenance extends Base
             $type = $this->getSanitizer()->getString('type', $row);
 
             // Ignore any module files or fonts
-            if ($type == 'module' || $type == 'font' || ($type == 'genericfile' && $tidyGenericFiles != 1))
+            if ($type == 'module' || $type == 'font' || $type == 'playersoftware' || ($type == 'genericfile' && $tidyGenericFiles != 1))
                 continue;
 
             // Collect media revisions that aren't used
@@ -292,7 +298,7 @@ class Maintenance extends Base
         $i = 0;
 
         // Library location
-        $libraryLocation = $this->getConfig()->GetSetting("LIBRARY_LOCATION");
+        $libraryLocation = $this->getConfig()->getSetting("LIBRARY_LOCATION");
 
         // Get a list of all media files
         foreach(scandir($library) as $file) {
@@ -326,7 +332,7 @@ class Maintenance extends Base
                 $this->getLog()->debug('Deleting unused revision media: ' . $media[$file]['mediaid']);
 
                 $this->mediaFactory->getById($media[$file]['mediaid'])
-                    ->setChildObjectDependencies($this->layoutFactory, $this->widgetFactory, $this->displayGroupFactory, $this->displayFactory, $this->scheduleFactory)
+                    ->setChildObjectDependencies($this->layoutFactory, $this->widgetFactory, $this->displayGroupFactory, $this->displayFactory, $this->scheduleFactory, $this->playerVersionFactory)
                     ->delete();
             }
             else if (array_key_exists($file, $unusedMedia)) {
@@ -334,7 +340,7 @@ class Maintenance extends Base
                 $this->getLog()->debug('Deleting unused media: ' . $media[$file]['mediaid']);
 
                 $this->mediaFactory->getById($media[$file]['mediaid'])
-                    ->setChildObjectDependencies($this->layoutFactory, $this->widgetFactory, $this->displayGroupFactory, $this->displayFactory, $this->scheduleFactory)
+                    ->setChildObjectDependencies($this->layoutFactory, $this->widgetFactory, $this->displayGroupFactory, $this->displayFactory, $this->scheduleFactory, $this->playerVersionFactory)
                     ->delete();
             }
             else {
@@ -387,7 +393,7 @@ class Maintenance extends Base
         }
 
         // get temporary file
-        $libraryLocation = $this->getConfig()->GetSetting('LIBRARY_LOCATION') . 'temp/';
+        $libraryLocation = $this->getConfig()->getSetting('LIBRARY_LOCATION') . 'temp/';
         $fileNameStructure = $libraryLocation . 'structure.dump';
         $fileNameData = $libraryLocation . 'data.dump';
         $zipFile = $libraryLocation . 'database.tar.gz';
@@ -432,19 +438,23 @@ class Maintenance extends Base
         header('Content-Length: ' . $size);
 
         // Send via Apache X-Sendfile header?
-        if ($this->getConfig()->GetSetting('SENDFILE_MODE') == 'Apache') {
+        if ($this->getConfig()->getSetting('SENDFILE_MODE') == 'Apache') {
             header("X-Sendfile: $zipFile");
             $this->getApp()->halt(200);
         }
         // Send via Nginx X-Accel-Redirect?
-        if ($this->getConfig()->GetSetting('SENDFILE_MODE') == 'Nginx') {
+        if ($this->getConfig()->getSetting('SENDFILE_MODE') == 'Nginx') {
             header("X-Accel-Redirect: /download/temp/" . basename($zipFile));
             $this->getApp()->halt(200);
         }
 
         // Return the file with PHP
+        while (ob_get_level() > 0) {
+            ob_end_clean();
+        }
         readfile($zipFile);
 
         $this->setNoOutput(true);
+        exit;
     }
 }

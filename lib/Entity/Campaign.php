@@ -81,6 +81,7 @@ class Campaign implements \JsonSerializable
     public $totalDuration;
 
     public $tags = [];
+    public $tagValues;
 
     /**
      * @var Layout[]
@@ -265,13 +266,20 @@ class Campaign implements \JsonSerializable
      * Assign Tag
      * @param Tag $tag
      * @return $this
+     * @throws NotFoundException
      */
     public function assignTag($tag)
     {
         $this->load();
 
-        if (!in_array($tag, $this->tags))
-            $this->tags[] = $tag;
+        if ($this->tags != [$tag]) {
+
+            if (!in_array($tag, $this->tags)) {
+                $this->tags[] = $tag;
+            }
+        } else {
+            $this->getLog()->debug('No Tags to assign');
+        }
 
         return $this;
     }
@@ -280,14 +288,21 @@ class Campaign implements \JsonSerializable
      * Unassign tag
      * @param Tag $tag
      * @return $this
+     * @throws NotFoundException
      */
     public function unassignTag($tag)
     {
+        $this->load();
+
         $this->tags = array_udiff($this->tags, [$tag], function($a, $b) {
             /* @var Tag $a */
             /* @var Tag $b */
             return $a->tagId - $b->tagId;
         });
+
+        $this->unassignTags[] = $tag;
+
+        $this->getLog()->debug('Tags after removal %s', json_encode($this->tags));
 
         return $this;
     }
@@ -300,18 +315,22 @@ class Campaign implements \JsonSerializable
         if (!is_array($this->tags) || count($this->tags) <= 0)
             $this->tags = $this->tagFactory->loadByCampaignId($this->campaignId);
 
-        $this->unassignTags = array_udiff($this->tags, $tags, function($a, $b) {
-            /* @var Tag $a */
-            /* @var Tag $b */
-            return $a->tagId - $b->tagId;
-        });
+        if ($this->tags != $tags) {
+            $this->unassignTags = array_udiff($this->tags, $tags, function ($a, $b) {
+                /* @var Tag $a */
+                /* @var Tag $b */
+                return $a->tagId - $b->tagId;
+            });
 
-        $this->getLog()->debug('Tags to be removed: %s', json_encode($this->unassignTags));
+            $this->getLog()->debug('Tags to be removed: %s', json_encode($this->unassignTags));
 
-        // Replace the arrays
-        $this->tags = $tags;
+            // Replace the arrays
+            $this->tags = $tags;
 
-        $this->getLog()->debug('Tags remaining: %s', json_encode($this->tags));
+            $this->getLog()->debug('Tags remaining: %s', json_encode($this->tags));
+        } else {
+            $this->getLog()->debug('Tags were not changed');
+        }
     }
 
     /**
@@ -339,28 +358,29 @@ class Campaign implements \JsonSerializable
         }
         else
             $this->update();
-        
-            
-        // Save the tags
-        if (is_array($this->tags)) {
-            foreach ($this->tags as $tag) {
-                /* @var Tag $tag */
 
-                $this->getLog()->debug('Assigning tag ' . $tag->tag);
+        if ($options['saveTags']) {
+            // Save the tags
+            if (is_array($this->tags)) {
+                foreach ($this->tags as $tag) {
+                    /* @var Tag $tag */
 
-                $tag->assignCampaign($this->campaignId);
-                $tag->save();
+                    $this->getLog()->debug('Assigning tag ' . $tag->tag);
+
+                    $tag->assignCampaign($this->campaignId);
+                    $tag->save();
+                }
             }
-        }
 
-        // Remove unwanted ones
-        if (is_array($this->unassignTags)) {
-            foreach ($this->unassignTags as $tag) {
-                /* @var Tag $tag */
-                $this->getLog()->debug('Unassigning tag ' . $tag->tag);
+            // Remove unwanted ones
+            if (is_array($this->unassignTags)) {
+                foreach ($this->unassignTags as $tag) {
+                    /* @var Tag $tag */
+                    $this->getLog()->debug('Unassigning tag ' . $tag->tag);
 
-                $tag->unassignCampaign($this->campaignId);
-                $tag->save();
+                    $tag->unassignCampaign($this->campaignId);
+                    $tag->save();
+                }
             }
         }
 
@@ -442,8 +462,10 @@ class Campaign implements \JsonSerializable
     /**
      * Unassign Layout
      * @param Layout $layout
+     * @param bool $unassignCompletely
+     * @throws NotFoundException
      */
-    public function unassignLayout($layout)
+    public function unassignLayout($layout, $unassignCompletely = false)
     {
         $this->load();
 
@@ -451,29 +473,42 @@ class Campaign implements \JsonSerializable
         $this->getLog()->debug('Unassigning Layout, count before assign = ' . $countBefore);
 
         $found = false;
-        $existingKey = null;
+        $existingKeys = [];
+
         foreach ($this->layouts as $key => $existing) {
+
             /** @var Layout $existing */
             $this->getLog()->debug('Comparing existing [' . $existing->layoutId . ', ' . $existing->displayOrder . '] with unassign [' . $layout->layoutId . ', ' . $layout->displayOrder . '].');
 
-            if ($layout->displayOrder == null) {
-                if ($existing->getId() == $layout->getId()) {
-                    $found = true;
-                    $existingKey = $key;
-                    break;
+            if (!$unassignCompletely) {
+                if ($layout->displayOrder == null) {
+                    if ($existing->getId() == $layout->getId()) {
+                        $found = true;
+                        $existingKeys[] = $key;
+                        break;
+                    }
+                } else {
+                    if ($existing->getId() == $layout->getId() && $existing->displayOrder == $layout->displayOrder) {
+                        $found = true;
+                        $existingKeys[] = $key;
+                        break;
+                    }
                 }
             } else {
-                if ($existing->getId() == $layout->getId() && $existing->displayOrder == $layout->displayOrder) {
+                // we came here from Layout delete, make sure to unassign all occurrences of that Layout from the campaign
+                // https://github.com/xibosignage/xibo/issues/1960
+                if ($existing->getId() == $layout->getId()) {
                     $found = true;
-                    $existingKey = $key;
-                    break;
+                    $existingKeys[] = $key;
                 }
             }
         }
 
         if ($found) {
-            $this->getLog()->debug('Removing item at key ' . $existingKey);
-            unset($this->layouts[$existingKey]);
+            foreach ($existingKeys as $existingKey) {
+                $this->getLog()->debug('Removing item at key ' . $existingKey);
+                unset($this->layouts[$existingKey]);
+            }
         }
 
         $countAfter = count($this->layouts);

@@ -26,7 +26,7 @@
 
 {% block actionMenu %}
     <ul class="nav nav-pills pull-right">
-        {% if settings.TASK_CONFIG_LOCKED_CHECKB == "Unchecked" %}
+        {% if settings.TASK_CONFIG_LOCKED_CHECKB == 0 or settings.TASK_CONFIG_LOCKED_CHECKB == "Unchecked" %}
         <li class="btn btn-success btn-xs"><a class="XiboFormButton btns" href="{{ urlFor("task.add.form") }}"><i class="fa fa-plus-circle" aria-hidden="true"></i> {% trans "Add Task" %}</a></li>
         {% endif %}
         <li class="btn btn-success btn-xs"><a class="btns" id="refreshLog" title="{% trans "Refresh the Log" %}" href="#"><i class="fa fa-refresh" aria-hidden="true"></i> {% trans "Refresh" %}</a></li>
@@ -58,7 +58,7 @@
                                 <th>{% trans "Last Run" %}</th>
                                 <th>{% trans "Last Status" %}</th>
                                 <th>{% trans "Last Duration" %}</th>
-                                <th></th>
+                                <th>{% trans "Row Menu" %}</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -76,7 +76,7 @@
         var table = $("#tasks").DataTable({ "language": dataTablesLanguage,
             serverSide: true, stateSave: true, stateDuration: 0,
             stateLoadCallback: function (settings, callback) {
-                var data;
+                var data = {};
                 $.ajax({
                     type: "GET",
                     async: false,
@@ -126,7 +126,11 @@
                         var icon = "";
                         var title = "";
                         if (data === 1) {
-                            title = "PID: " + row.pid + " (" + moment(row.lastRunStartDt, "X").tz(timezone).format(jsDateFormat) + ")";
+                            if (moment(row.lastRunStartDt, "X").tz) {
+                                title = "PID: " + row.pid + " (" + moment(row.lastRunStartDt, "X").tz(timezone).format(jsDateFormat) + ")";
+                            } else {
+                                title = "PID: " + row.pid + " (" + moment(row.lastRunStartDt, "X").format(jsDateFormat) + ")";
+                            }
                             icon = "fa-cogs";
                         }
                         else if (data === 3) {
@@ -190,6 +194,7 @@
 
         table.on('draw', dataTableDraw);
         table.on('processing.dt', dataTableProcessing);
+        dataTableAddButtons(table, $('#tasks_wrapper').find('.col-sm-6').eq(1));
 
         $("#refreshLog").click(function () {
             table.ajax.reload();

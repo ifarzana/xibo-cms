@@ -14,7 +14,14 @@
 // ***********************************************************
 
 // Import commands.js using ES2015 syntax:
-import './commands'
+import './commands';
 
 // Alternatively you can use CommonJS syntax:
 // require('./commands')
+
+// Run before every test spec, to disable User Welcome tour
+before(function() {
+    cy.login().then(() => {
+        cy.tutorialClose();
+    });
+});

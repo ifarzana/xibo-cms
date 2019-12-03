@@ -22,9 +22,11 @@ namespace Xibo\Controller;
 use Xibo\Entity\User;
 use Xibo\Exception\AccessDeniedException;
 use Xibo\Exception\ConfigurationException;
+use Xibo\Exception\InvalidArgumentException;
 use Xibo\Exception\NotFoundException;
 use Xibo\Exception\XiboException;
 use Xibo\Factory\UserFactory;
+use Xibo\Helper\Environment;
 use Xibo\Helper\HttpsDetect;
 use Xibo\Helper\Random;
 use Xibo\Helper\Session;
@@ -32,6 +34,8 @@ use Xibo\Service\ConfigServiceInterface;
 use Xibo\Service\DateServiceInterface;
 use Xibo\Service\LogServiceInterface;
 use Xibo\Service\SanitizerServiceInterface;
+use Xibo\Storage\StorageServiceInterface;
+use RobThree\Auth\TwoFactorAuth;
 
 /**
  * Class Login
@@ -43,6 +47,9 @@ class Login extends Base
      * @var Session
      */
     private $session;
+
+    /** @var StorageServiceInterface  */
+    private $store;
 
     /**
      * @var UserFactory
@@ -65,13 +72,14 @@ class Login extends Base
      * @param UserFactory $userFactory
      * @param \Stash\Interfaces\PoolInterface $pool
      */
-    public function __construct($log, $sanitizerService, $state, $user, $help, $date, $config, $session, $userFactory, $pool)
+    public function __construct($log, $sanitizerService, $state, $user, $help, $date, $config, $session, $userFactory, $pool, $store)
     {
         $this->setCommonDependencies($log, $sanitizerService, $state, $user, $help, $date, $config);
 
         $this->session = $session;
         $this->userFactory = $userFactory;
         $this->pool = $pool;
+        $this->store = $store;
     }
 
     /**
@@ -104,6 +112,12 @@ class Login extends Base
 
                 try {
                     $user = $this->userFactory->getById($validated['userId']);
+
+                    // Dooh user
+                    if ($user->userTypeId === 4) {
+                        $this->getLog()->error('Cannot log in as this User type');
+                        $this->getApp()->flashNow('login_message', __('Invalid User Type'));
+                    }
 
                     // Log in this user
                     $user->touch(true);
@@ -147,14 +161,16 @@ class Login extends Base
         }
 
         // Check to see if the password reminder functionality is enabled.
-        $passwordReminderEnabled = $this->getConfig()->GetSetting('PASSWORD_REMINDER_ENABLED');
-        $mailFrom = $this->getConfig()->GetSetting('mail_from');
+        $passwordReminderEnabled = $this->getConfig()->getSetting('PASSWORD_REMINDER_ENABLED');
+        $mailFrom = $this->getConfig()->getSetting('mail_from');
+        $authCASEnabled = isset($this->app->configService->casSettings);
 
         // Template
         $this->getState()->template = 'login';
         $this->getState()->setData([
             'passwordReminderEnabled' => (($passwordReminderEnabled === 'On' || $passwordReminderEnabled === 'On except Admin') && $mailFrom != ''),
-            'version' => VERSION
+            'authCASEnabled' => $authCASEnabled,
+            'version' => Environment::$WEBSITE_VERSION_NAME
         ]);
     }
 
@@ -180,8 +196,19 @@ class Login extends Base
                 /* @var User $user */
                 $user = $this->userFactory->getByName($username);
 
+                // Dooh user
+                if ($user->userTypeId === 4) {
+                    throw new AccessDeniedException('Invalid User Type');
+                }
+
                 // Check password
                 $user->checkPassword($password);
+
+                // check if 2FA is enabled
+                if ($user->twoFactorTypeId != 0) {
+                    $_SESSION['tfaUsername'] = $user->userName;
+                    $this->app->redirect('tfa');
+                }
 
                 $user->touch();
 
@@ -213,7 +240,11 @@ class Login extends Base
         }
         catch (\Xibo\Exception\AccessDeniedException $e) {
             $this->getLog()->warning($e->getMessage());
-            $this->getApp()->flash('login_message', __('Username or Password incorrect'));
+            if ($user->userTypeId != 4) {
+                $this->getApp()->flash('login_message', __('Username or Password incorrect'));
+            } else {
+                $this->getApp()->flash('login_message', __($e->getMessage()));
+            }
             $this->getApp()->flash('priorRoute', $priorRoute);
         }
         catch (\Xibo\Exception\FormExpiredException $e) {
@@ -232,8 +263,8 @@ class Login extends Base
     public function forgottenPassword()
     {
         // Is this functionality enabled?
-        $passwordReminderEnabled = $this->getConfig()->GetSetting('PASSWORD_REMINDER_ENABLED');
-        $mailFrom = $this->getConfig()->GetSetting('mail_from');
+        $passwordReminderEnabled = $this->getConfig()->getSetting('PASSWORD_REMINDER_ENABLED');
+        $mailFrom = $this->getConfig()->getSetting('mail_from');
 
         if (!(($passwordReminderEnabled === 'On' || $passwordReminderEnabled === 'On except Admin') && $mailFrom != '')) {
             throw new ConfigurationException(__('This feature has been disabled by your administrator'));
@@ -276,14 +307,15 @@ class Login extends Base
             // Make a link
             $link = ((new HttpsDetect())->getUrl()) . $this->getApp()->urlFor('login') . '?nonce=' . $action . '::' . $nonce;
 
-            $this->getLog()->debug('Link is:' . $link);
+            // Uncomment this to get a debug message showing the link.
+            //$this->getLog()->debug('Link is:' . $link);
 
             // Send the mail
             $mail = new \PHPMailer\PHPMailer\PHPMailer();
             $mail->CharSet = 'UTF-8';
             $mail->Encoding = 'base64';
             $mail->From = $mailFrom;
-            $msgFromName = $this->getConfig()->GetSetting('mail_from_name');
+            $msgFromName = $this->getConfig()->getSetting('mail_from_name');
 
             if ($msgFromName != null)
                 $mail->FromName = $msgFromName;
@@ -379,7 +411,7 @@ class Login extends Base
             $response->template = 'about-page';
         }
 
-        $response->setData(['version' => VERSION, 'sourceUrl' => $this->getConfig()->getThemeConfig('cms_source_url')]);
+        $response->setData(['version' => Environment::$WEBSITE_VERSION_NAME, 'sourceUrl' => $this->getConfig()->getThemeConfig('cms_source_url')]);
     }
 
     /**
@@ -402,5 +434,184 @@ class Login extends Base
         ob_end_clean();
 
         return $body;
+    }
+
+    /**
+     * 2FA Auth required
+     * @throws \Xibo\Exception\XiboException
+     * @throws \RobThree\Auth\TwoFactorAuthException
+     * @throws \PHPMailer\PHPMailer\Exception
+     */
+    public function twoFactorAuthForm()
+    {
+        if (!isset($_SESSION['tfaUsername'])) {
+            $this->getApp()->flash('login_message', __('Session has expired, please log in again'));
+            $this->getApp()->redirectTo('login');
+        }
+
+        $user = $this->userFactory->getByName($_SESSION['tfaUsername']);
+
+        // if our user has email two factor enabled, we need to send the email with code now
+        if ($user->twoFactorTypeId === 1) {
+
+            if ($user->email == '') {
+                throw new NotFoundException('No email');
+            }
+
+            $mailFrom = $this->getConfig()->getSetting('mail_from');
+            $issuerSettings = $this->getConfig()->getSetting('TWOFACTOR_ISSUER');
+            $appName = $this->getConfig()->getThemeConfig('app_name');
+
+            if ($issuerSettings !== '') {
+                $issuer = $issuerSettings;
+            } else {
+                $issuer = $appName;
+            }
+
+            if ($mailFrom == '') {
+                throw new InvalidArgumentException(__('Sending email address in CMS Settings is not configured'), 'mail_from');
+            }
+
+            $tfa = new TwoFactorAuth($issuer);
+
+            // Nonce parts (nonce isn't ever stored, only the hash of it is stored, it only exists in the email)
+            $action = 'user-tfa-email-auth' . Random::generateString(10);
+            $nonce = Random::generateString(20);
+
+            // Create a nonce for this user and store it somewhere
+            $cache = $this->pool->getItem('/nonce/' . $action);
+
+            $cache->set([
+                'action' => $action,
+                'hash' => password_hash($nonce, PASSWORD_DEFAULT),
+                'userId' => $user->userId
+            ]);
+            $cache->expiresAfter(1800); // 30 minutes?
+
+            // Save cache
+            $this->pool->save($cache);
+
+            // Make a link
+            $code = $tfa->getCode($user->twoFactorSecret);
+
+            // Send the mail
+            $mail = new \PHPMailer\PHPMailer\PHPMailer();
+            $mail->CharSet = 'UTF-8';
+            $mail->Encoding = 'base64';
+            $mail->From = $mailFrom;
+            $msgFromName = $this->getConfig()->getSetting('mail_from_name');
+
+            if ($msgFromName != null) {
+                $mail->FromName = $msgFromName;
+            }
+
+            $mail->Subject = __('Two Factor Authentication');
+            $mail->addAddress($user->email);
+
+            // Body
+            $mail->isHTML(true);
+            $mail->Body = $this->generateEmailBody($mail->Subject,
+                '<p>' . __('You are receiving this email because two factor email authorisation is enabled in your CMS user account. If you did not make this request, please report this email to your administrator immediately.') . '</p>' . '<p>' . $code . '</p>');
+
+            if (!$mail->send()) {
+                throw new ConfigurationException('Unable to send two factor code to ' . $user->email);
+            } else {
+                $this->getApp()->flash('login_message',
+                    __('Two factor code email has been sent to your email address'));
+            }
+
+            // Audit Log
+            $this->getLog()->audit('User', $user->userId, 'Two Factor Code email sent', [
+                'IPAddress' => $this->getApp()->request()->getIp(),
+                'UserAgent' => $this->getApp()->request()->getUserAgent()
+            ]);
+
+        }
+
+        // Template
+        $this->getState()->template = 'tfa';
+    }
+
+    /**
+     * @throws ConfigurationException
+     * @throws NotFoundException
+     * @throws \RobThree\Auth\TwoFactorAuthException
+     */
+    public function twoFactorAuthValidate()
+    {
+        $user = $this->userFactory->getByName($_SESSION['tfaUsername']);
+        $result = false;
+        $updatedCodes = [];
+
+        if (isset($_POST['code'])) {
+            $issuerSettings = $this->getConfig()->getSetting('TWOFACTOR_ISSUER');
+            $appName = $this->getConfig()->getThemeConfig('app_name');
+
+            if ($issuerSettings !== '') {
+                $issuer = $issuerSettings;
+            } else {
+                $issuer = $appName;
+            }
+
+            $tfa = new TwoFactorAuth($issuer);
+
+            if ($user->twoFactorTypeId === 1 && $user->email !== '') {
+                $result = $tfa->verifyCode($user->twoFactorSecret, $this->getSanitizer()->getString('code'), 8);
+            } else {
+                $result = $tfa->verifyCode($user->twoFactorSecret, $this->getSanitizer()->getString('code'), 2);
+            }
+        } elseif (isset($_POST['recoveryCode'])) {
+            // get the array of recovery codes, go through them and try to match provided code
+            $codes = $user->twoFactorRecoveryCodes;
+
+            foreach (json_decode($codes) as $code) {
+                // if the provided recovery code matches one stored in the database, we want to log in the user
+                if ($this->getSanitizer()->string($code) === $this->getSanitizer()->getString('recoveryCode')) {
+                    $result = true;
+                }
+
+                if ($this->getSanitizer()->string($code) !== $this->getSanitizer()->getString('recoveryCode')) {
+                    $updatedCodes[] = $this->getSanitizer()->string($code);
+                }
+
+            }
+            // recovery codes are one time use, as such we want to update user recovery codes and remove the one that was just used.
+            $user->updateRecoveryCodes(json_encode($updatedCodes));
+        }
+
+        if ($result) {
+            $user->touch();
+
+            $this->getLog()->info('%s user logged in.', $user->userName);
+
+            // Set the userId on the log object
+            $this->getLog()->setUserId($user->userId);
+
+            // Overwrite our stored user with this new object.
+            $this->getApp()->user = $user;
+
+            // Switch Session ID's
+            $session = $this->session;
+            $session->setIsExpired(0);
+            $session->regenerateSessionId();
+            $session->setUser($user->userId);
+
+            // Audit Log
+            $this->getLog()->audit('User', $user->userId, 'Login Granted', [
+                'IPAddress' => $this->getApp()->request()->getIp(),
+                'UserAgent' => $this->getApp()->request()->getUserAgent()
+            ]);
+
+            $this->setNoOutput(true);
+
+            //unset the session tfaUsername
+            unset($_SESSION['tfaUsername']);
+
+            $this->getApp()->redirectTo('home');
+        } else {
+            $this->getLog()->error('Authentication code incorrect, redirecting to login page');
+            $this->getApp()->flash('login_message', __('Authentication code incorrect'));
+            $this->getApp()->redirectTo('login');
+        }
     }
 }

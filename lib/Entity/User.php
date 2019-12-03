@@ -1,14 +1,15 @@
 <?php
-/*
- * Xibo - Digital Signage - http://www.xibo.org.uk
- * Copyright (C) 2006-2015 Daniel Garner
+/**
+ * Copyright (C) 2019 Xibo Signage Ltd
  *
- * This file (User.php) is part of Xibo.
+ * Xibo - Digital Signage - http://www.xibo.org.uk
+ *
+ * This file is part of Xibo.
  *
  * Xibo is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as published by
  * the Free Software Foundation, either version 3 of the License, or
- * any later version. 
+ * any later version.
  *
  * Xibo is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -37,6 +38,8 @@ use Xibo\Factory\LayoutFactory;
 use Xibo\Factory\MediaFactory;
 use Xibo\Factory\PageFactory;
 use Xibo\Factory\PermissionFactory;
+use Xibo\Factory\PlayerVersionFactory;
+use Xibo\Factory\PlaylistFactory;
 use Xibo\Factory\ScheduleFactory;
 use Xibo\Factory\UserFactory;
 use Xibo\Factory\UserGroupFactory;
@@ -217,6 +220,12 @@ class User implements \JsonSerializable
     public $events = [];
 
     /**
+     * @SWG\Property(description="An array of Playlists owned by this User")
+     * @var Playlist[]
+     */
+    public $playlists = [];
+
+    /**
      * @SWG\Property(description="The name of home page")
      * @var string
      */
@@ -235,9 +244,39 @@ class User implements \JsonSerializable
     public $isDisplayNotification = 0;
 
     /**
+     * @SWG\Property(description="The two factor type id")
+     * @var int
+     */
+    public $twoFactorTypeId;
+
+    /**
+     * @SWG\Property(description="Two Factor authorisation shared secret for this user")
+     * @var string
+     */
+    public $twoFactorSecret;
+
+    /**
+     * @SWG\Property(description="Two Factor authorisation recovery codes", @SWG\Items(type="string"))
+     * @var array
+     */
+    public $twoFactorRecoveryCodes = [];
+
+    /**
+     * @SWG\Property(description="Should we show content added by standard users in relevant grids (1) or content added by the DOOH user? (2). Super admins have an option to change this in their User profile. ")
+     * @var int
+     */
+    public $showContentFrom = 1;
+
+    /**
      * @var UserOption[]
      */
     private $userOptions = [];
+
+    /**
+     * User options that have been removed
+     * @var \Xibo\Entity\UserOption[]
+     */
+    private $userOptionsRemoved = [];
 
     /**
      * Cached Permissions
@@ -313,6 +352,12 @@ class User implements \JsonSerializable
     /** @var WidgetFactory */
     private $widgetFactory;
 
+    /** @var PlayerVersionFactory */
+    private $playerVersionFactory;
+
+    /** @var PlaylistFactory */
+    private $playlistFactory;
+
     /**
      * Entity constructor.
      * @param StorageServiceInterface $store
@@ -338,6 +383,8 @@ class User implements \JsonSerializable
         $this->permissionFactory = $permissionFactory;
         $this->userOptionFactory = $userOptionFactory;
         $this->applicationScopeFactory = $applicationScopeFactory;
+        $this->excludeProperty('twoFactorSecret');
+        $this->excludeProperty('twoFactorRecoveryCodes');
     }
 
     /**
@@ -368,9 +415,11 @@ class User implements \JsonSerializable
      * @param DisplayFactory $displayFactory
      * @param DisplayGroupFactory $displayGroupFactory
      * @param WidgetFactory $widgetFactory
+     * @param PlayerVersionFactory $playerVersionFactory
+     * @param PlaylistFactory $playlistFactory
      * @return $this
      */
-    public function setChildObjectDependencies($campaignFactory, $layoutFactory, $mediaFactory, $scheduleFactory, $displayFactory, $displayGroupFactory, $widgetFactory)
+    public function setChildObjectDependencies($campaignFactory, $layoutFactory, $mediaFactory, $scheduleFactory, $displayFactory, $displayGroupFactory, $widgetFactory, $playerVersionFactory, $playlistFactory)
     {
         $this->campaignFactory = $campaignFactory;
         $this->layoutFactory = $layoutFactory;
@@ -379,6 +428,8 @@ class User implements \JsonSerializable
         $this->displayFactory = $displayFactory;
         $this->displayGroupFactory = $displayGroupFactory;
         $this->widgetFactory = $widgetFactory;
+        $this->playerVersionFactory = $playerVersionFactory;
+        $this->playlistFactory = $playlistFactory;
         return $this;
     }
 
@@ -436,6 +487,20 @@ class User implements \JsonSerializable
     }
 
     /**
+     * Remove the provided option
+     * @param \Xibo\Entity\UserOption $option
+     * @return $this
+     */
+    private function removeOption($option)
+    {
+        $this->getLog()->debug('Removing: ' . $option);
+
+        $this->userOptionsRemoved[] = $option;
+        $this->userOptions = array_diff($this->userOptions, [$option]);
+        return $this;
+    }
+
+    /**
      * Get User Option Value
      * @param string $option
      * @param mixed $default
@@ -448,8 +513,7 @@ class User implements \JsonSerializable
         try {
             $userOption = $this->getOption($option);
             return $userOption->value;
-        }
-        catch (NotFoundException $e) {
+        } catch (NotFoundException $e) {
             return $default;
         }
     }
@@ -462,9 +526,14 @@ class User implements \JsonSerializable
     public function setOptionValue($option, $value)
     {
         try {
-            $this->getOption($option)->value = $value;
-        }
-        catch (NotFoundException $e) {
+            $option = $this->getOption($option);
+
+            if ($value === null) {
+                $this->removeOption($option);
+            } else {
+                $option->value = $value;
+            }
+        } catch (NotFoundException $e) {
             $this->userOptions[] = $this->userOptionFactory->create($this->userId, $option, $value);
         }
     }
@@ -509,7 +578,7 @@ class User implements \JsonSerializable
         if ($this->userId == 0)
             throw new NotFoundException(__('User not found'));
 
-        if ($this->CSPRNG == 0 || $this->configService->Version('DBVersion') < 62) {
+        if ($this->CSPRNG == 0) {
             // Password is tested using a plain MD5 check
             if ($this->password != md5($password))
                 throw new AccessDeniedException();
@@ -578,6 +647,7 @@ class User implements \JsonSerializable
     /**
      * Load this User
      * @param bool $all Load everything this user owns
+     * @throws NotFoundException
      */
     public function load($all = false)
     {
@@ -592,13 +662,14 @@ class User implements \JsonSerializable
         $this->groups = $this->userGroupFactory->getByUserId($this->userId);
 
         if ($all) {
-            if ($this->campaignFactory == null || $this->layoutFactory == null || $this->mediaFactory == null || $this->scheduleFactory == null)
+            if ($this->campaignFactory == null || $this->layoutFactory == null || $this->mediaFactory == null || $this->scheduleFactory == null || $this->playlistFactory == null)
                 throw new \RuntimeException('Cannot load user with all objects without first calling setChildObjectDependencies');
 
             $this->campaigns = $this->campaignFactory->getByOwnerId($this->userId);
             $this->layouts = $this->layoutFactory->getByOwnerId($this->userId);
             $this->media = $this->mediaFactory->getByOwnerId($this->userId);
             $this->events = $this->scheduleFactory->getByOwnerId($this->userId);
+            $this->playlists = $this->playlistFactory->getByOwnerId($this->userId);
         }
 
         $this->userOptions = $this->userOptionFactory->getByUserId($this->userId);
@@ -617,7 +688,7 @@ class User implements \JsonSerializable
     {
         $this->load(true);
 
-        $count = count($this->campaigns) + count($this->layouts) + count($this->media) + count($this->events);
+        $count = count($this->campaigns) + count($this->layouts) + count($this->media) + count($this->events) + count($this->playlists);
         $this->getLog()->debug('Counted Children on %d, there are %d', $this->userId, $count);
 
         return $count;
@@ -626,6 +697,7 @@ class User implements \JsonSerializable
     /**
      * Reassign all
      * @param User $user
+     * @throws XiboException
      */
     public function reassignAllTo($user)
     {
@@ -643,21 +715,30 @@ class User implements \JsonSerializable
         }
         foreach ($this->events as $event) {
             /* @var Schedule $event */
+            $event->load();
             $event->setOwner($user->getOwnerId());
             $event->setDisplayFactory($this->displayFactory);
+            $event->load();
             $event->save(['generate' => false]);
         }
         foreach ($this->layouts as $layout) {
             /* @var Layout $layout */
-            $layout->setOwner($user->getOwnerId());
-            $layout->save();
+            $layout->setOwner($user->getOwnerId(), true);
+            $layout->save(['saveTags' => false]);
         }
         foreach ($this->campaigns as $campaign) {
             /* @var Campaign $campaign */
             $campaign->setOwner($user->getOwnerId());
-            $campaign->save();
+            $campaign->save(['saveTags' => false]);
         }
-
+        foreach ($this->playlists as $playlist) {
+            $playlist->setOwner($user->getOwnerId());
+            $playlist->save(['saveTags' => false]);
+        }
+        foreach($this->displayGroupFactory->getByOwnerId($this->userId) as $displayGroup) {
+            $displayGroup->setOwner($user->getOwnerId());
+            $displayGroup->save(['saveTags' => false, 'manageDynamicDisplayLinks' => false]);
+        }
 
         // Reassign resolutions
         $this->getStore()->update('UPDATE `resolution` SET userId = :userId WHERE userId = :oldUserId', [
@@ -711,6 +792,7 @@ class User implements \JsonSerializable
     /**
      * Save User
      * @param array $options
+     * @throws \Xibo\Exception\XiboException
      */
     public function save($options = [])
     {
@@ -734,6 +816,11 @@ class User implements \JsonSerializable
 
         // Save user options
         if ($options['saveUserOptions']) {
+            // Remove any that have been cleared
+            foreach ($this->userOptionsRemoved as $userOption) {
+                $userOption->delete();
+            }
+
             // Save all Options
             foreach ($this->userOptions as $userOption) {
                 /* @var UserOption $userOption */
@@ -745,6 +832,9 @@ class User implements \JsonSerializable
 
     /**
      * Delete User
+     * @throws InvalidArgumentException
+     * @throws NotFoundException
+     * @throws XiboException
      */
     public function delete()
     {
@@ -780,6 +870,7 @@ class User implements \JsonSerializable
         // Delete any Campaigns
         foreach ($this->campaigns as $campaign) {
             /* @var Campaign $campaign */
+            $campaign->setChildObjectDependencies($this->layoutFactory);
             $campaign->delete();
         }
 
@@ -792,8 +883,20 @@ class User implements \JsonSerializable
         // Delete any media
         foreach ($this->media as $media) {
             /* @var Media $media */
-            $media->setChildObjectDependencies($this->layoutFactory, $this->widgetFactory, $this->displayGroupFactory, $this->displayFactory, $this->scheduleFactory);
+            $media->setChildObjectDependencies($this->layoutFactory, $this->widgetFactory, $this->displayGroupFactory, $this->displayFactory, $this->scheduleFactory, $this->playerVersionFactory);
             $media->delete();
+        }
+
+        // Delete Playlists owned by this user
+        foreach ($this->playlists as $playlist) {
+            /* @var Playlist $playlist */
+            $playlist->delete();
+        }
+
+        // Display Groups owned by this user
+        foreach($this->displayGroupFactory->getByOwnerId($this->userId) as $displayGroup) {
+            $displayGroup->setChildObjectDependencies($this->displayFactory, $this->layoutFactory, $this->mediaFactory, $this->scheduleFactory);
+            $displayGroup->delete();
         }
 
         // Delete user specific entities
@@ -844,7 +947,7 @@ class User implements \JsonSerializable
      */
     private function update()
     {
-        $this->getLog()->debug('Update user. %d. homePageId', $this->userId);
+        $this->getLog()->debug('Update userId %d.', $this->userId);
 
         $sql = 'UPDATE `user` SET UserName = :userName,
                   homePageId = :homePageId,
@@ -855,6 +958,10 @@ class User implements \JsonSerializable
                   CSPRNG = :CSPRNG,
                   `UserPassword` = :password,
                   `isPasswordChangeRequired` = :isPasswordChangeRequired,
+                  `twoFactorTypeId` = :twoFactorTypeId,
+                  `twoFactorSecret` = :twoFactorSecret,
+                  `twoFactorRecoveryCodes` = :twoFactorRecoveryCodes,
+                  `showContentFrom` = :showContentFrom,
                   `firstName` = :firstName,
                   `lastName` = :lastName,
                   `phone` = :phone,
@@ -875,6 +982,10 @@ class User implements \JsonSerializable
             'CSPRNG' => $this->CSPRNG,
             'password' => $this->password,
             'isPasswordChangeRequired' => $this->isPasswordChangeRequired,
+            'twoFactorTypeId' => $this->twoFactorTypeId,
+            'twoFactorSecret' => $this->twoFactorSecret,
+            'twoFactorRecoveryCodes' => ($this->twoFactorRecoveryCodes == '') ? null : json_encode($this->twoFactorRecoveryCodes),
+            'showContentFrom' => $this->showContentFrom,
             'firstName' => $this->firstName,
             'lastName' => $this->lastName,
             'phone' => $this->phone,
@@ -926,7 +1037,7 @@ class User implements \JsonSerializable
     {
         $sql = 'UPDATE `user` SET lastAccessed = :time ';
 
-        if ($forcePasswordChange && DBVERSION >= 143) {
+        if ($forcePasswordChange) {
             $sql .= ' , isPasswordChangeRequired = 1 ';
         }
 
@@ -1020,6 +1131,31 @@ class User implements \JsonSerializable
     }
 
     /**
+     * Given an array of routes, count the ones that are viewable
+     * @param $routes
+     * @return int
+     * @throws \Xibo\Exception\ConfigurationException
+     */
+    public function countViewable($routes)
+    {
+        // Shortcut for super admins.
+        if ($this->userTypeId == 1) {
+            return count($routes);
+        }
+
+        // Test each route
+        $count = 0;
+
+        foreach ($routes as $route) {
+            if ($this->routeViewable($route)) {
+                $count++;
+            }
+        }
+
+        return $count;
+    }
+
+    /**
      * Load permissions for a particular entity
      * @param string $entity
      * @return array[Permission]
@@ -1105,7 +1241,7 @@ class User implements \JsonSerializable
         $this->checkObjectCompatibility($object);
 
         // Admin users
-        if ($this->userTypeId == 1 || $this->userId == $object->getOwnerId())
+        if ($this->userTypeId == 1 || $this->userId == $object->getOwnerId() || $this->userTypeId == 4)
             return true;
 
         // Group Admins
@@ -1134,7 +1270,7 @@ class User implements \JsonSerializable
         $this->checkObjectCompatibility($object);
 
         // Admin users
-        if ($this->userTypeId == 1 || $this->userId == $object->getOwnerId())
+        if ($this->userTypeId == 1 || $this->userId == $object->getOwnerId() || $this->userTypeId == 4)
             return true;
 
         // Group Admins
@@ -1231,28 +1367,23 @@ class User implements \JsonSerializable
 
     /**
      * Is this users library quota full
+     * @param boolean $reconnect
      * @throws LibraryFullException when the library is full or cannot be determined
      */
-    public function isQuotaFullByUser()
+    public function isQuotaFullByUser($reconnect = false)
     {
-        $dbh = $this->getStore()->getConnection();
         $groupId = 0;
         $userQuota = 0;
 
         // Get the maximum quota of this users groups and their own quota
-        $quotaSth = $dbh->prepare('
+        $rows = $this->getStore()->select('
             SELECT group.groupId, IFNULL(group.libraryQuota, 0) AS libraryQuota
               FROM `group`
                 INNER JOIN `lkusergroup`
                 ON group.groupId = lkusergroup.groupId
              WHERE lkusergroup.userId = :userId
             ORDER BY `group`.isUserSpecific DESC, IFNULL(group.libraryQuota, 0) DESC
-        ');
-
-        $quotaSth->execute(['userId' => $this->userId]);
-
-        // Loop over until we have a quota
-        $rows = $quotaSth->fetchAll(\PDO::FETCH_ASSOC);
+        ', ['userId' => $this->userId], null, $reconnect);
 
         if (count($rows) <= 0) {
             throw new LibraryFullException('Problem calculating this users library quota.');
@@ -1268,23 +1399,21 @@ class User implements \JsonSerializable
         }
 
         if ($userQuota > 0) {
-
             // If there is a quota, then test it against the current library position for this user.
             //   use the groupId that generated the quota in order to calculate the usage
-            $sth = $dbh->prepare('
+            $rows = $this->getStore()->select('
               SELECT IFNULL(SUM(FileSize), 0) AS SumSize
                 FROM `media`
                   INNER JOIN `lkusergroup`
                   ON lkusergroup.userId = media.userId
                WHERE lkusergroup.groupId = :groupId
-            ');
+            ', ['groupId' => $groupId], null, true);
 
-            $sth->execute(['groupId' => $groupId]);
-
-            if (!$row = $sth->fetch())
+            if (count($rows) <= 0) {
                 throw new LibraryFullException("Error Processing Request", 1);
+            }
 
-            $fileSize = intval($row['SumSize']);
+            $fileSize = intval($rows[0]['SumSize']);
 
             if (($fileSize / 1024) >= $userQuota) {
                 $this->getLog()->debug('User has exceeded library quota. FileSize: ' . $fileSize . ' bytes, quota is ' . $userQuota * 1024);
@@ -1300,11 +1429,11 @@ class User implements \JsonSerializable
     public function testPasswordAgainstPolicy($password)
     {
         // Check password complexity
-        $policy = $this->configService->GetSetting('USER_PASSWORD_POLICY');
+        $policy = $this->configService->getSetting('USER_PASSWORD_POLICY');
 
         if ($policy != '')
         {
-            $policyError = $this->configService->GetSetting('USER_PASSWORD_ERROR');
+            $policyError = $this->configService->getSetting('USER_PASSWORD_ERROR');
             $policyError = ($policyError == '') ? __('Your password does not meet the required complexity') : $policyError;
 
             if(!preg_match($policy, $password, $matches))
@@ -1321,5 +1450,41 @@ class User implements \JsonSerializable
         return array_filter($this->userOptions, function($element) {
             return !(stripos($element->option, 'Grid'));
         });
+    }
+
+    /**
+     * Clear the two factor stored secret and recovery codes
+     */
+    public function clearTwoFactor()
+    {
+        $this->twoFactorTypeId = 0;
+        $this->twoFactorSecret = NULL;
+        $this->twoFactorRecoveryCodes = NULL;
+
+        $sql = 'UPDATE `user` SET twoFactorSecret = :twoFactorSecret,
+                  twoFactorTypeId = :twoFactorTypeId,
+                  twoFactorRecoveryCodes =:twoFactorRecoveryCodes
+               WHERE userId = :userId';
+
+        $params = [
+            'userId' => $this->userId,
+            'twoFactorSecret' => $this->twoFactorSecret,
+            'twoFactorTypeId' => $this->twoFactorTypeId,
+            'twoFactorRecoveryCodes' => $this->twoFactorRecoveryCodes
+        ];
+
+        $this->getStore()->update($sql, $params);
+    }
+
+    public function updateRecoveryCodes($recoveryCodes)
+    {
+        $sql = 'UPDATE `user` SET twoFactorRecoveryCodes = :twoFactorRecoveryCodes WHERE userId = :userId';
+
+        $params = [
+            'userId' => $this->userId,
+            'twoFactorRecoveryCodes' => $recoveryCodes
+        ];
+
+        $this->getStore()->update($sql, $params);
     }
 }

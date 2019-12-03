@@ -156,28 +156,37 @@ class BaseFactory
             $user = $this->getUser();
 
             if ($user !== null)
-            $this->getLog()->debug('Checking permissions against the logged in user: ID: %d, Name: %s, UserType: %d', $user->userId, $user->userName, $user->userTypeId);
+                $this->getLog()->debug('Checking permissions against the logged in user: ID: %d, Name: %s, UserType: %d', $user->userId, $user->userName, $user->userTypeId);
         }
 
         $permissionSql = '';
 
-        if ($this->getSanitizer()->getCheckbox('disableUserCheck', 0, $filterBy) == 0 && $user->userTypeId != 1) {
+        if ($this->getSanitizer()->getCheckbox('disableUserCheck', 0, $filterBy) == 0 && ($user->userTypeId != 1 && $user->userTypeId != 4)) {
             $permissionSql .= '
               AND (' . $idColumn . ' IN (
                 SELECT `permission`.objectId
                   FROM `permission`
                     INNER JOIN `permissionentity`
-                    ON `permissionentity`.entityId = `permission`.entityId
+                        ON `permissionentity`.entityId = `permission`.entityId
                     INNER JOIN `group`
-                    ON `group`.groupId = `permission`.groupId
-                    LEFT OUTER JOIN `lkusergroup`
-                    ON `lkusergroup`.groupId = `group`.groupId
-                    LEFT OUTER JOIN `user`
-                    ON lkusergroup.UserID = `user`.UserID
-                      AND `user`.userId = :currentUserId
+                        ON `group`.groupId = `permission`.groupId
+                    INNER JOIN `lkusergroup`
+                        ON `lkusergroup`.groupId = `group`.groupId
+                    INNER JOIN `user`
+                        ON lkusergroup.UserID = `user`.UserID
                  WHERE `permissionentity`.entity = :permissionEntity
+                    AND `user`.userId = :currentUserId
                     AND `permission`.view = 1
-                    AND (`user`.userId IS NOT NULL OR `group`.IsEveryone = 1)
+                 UNION ALL   
+                 SELECT `permission`.objectId
+                    FROM `permission`
+                        INNER JOIN `permissionentity`
+                            ON `permissionentity`.entityId = `permission`.entityId
+                        INNER JOIN `group`
+                            ON `group`.groupId = `permission`.groupId
+                    WHERE `permissionentity`.entity = :permissionEntity
+                        AND `group`.isEveryone = 1
+                        AND `permission`.view = 1
               )
             ';
 
@@ -245,5 +254,127 @@ class BaseFactory
             'operator' => $operator,
             'variable' => $variable
         ];
+    }
+
+    /**
+     * Sets the name filter for all factories to use.
+     *
+     * @param string $tableName Table name
+     * @param string $tableColumn Column with the name
+     * @param array $terms An Array exploded by "," of the search names
+     * @param string $body Current SQL body passed by reference
+     * @param array $params Array of parameters passed by reference
+     */
+    public function nameFilter($tableName, $tableColumn, $terms, &$body, &$params)
+    {
+        $i = 0;
+        $j = 0;
+        $searchNames = [];
+        $tableAndColumn = $tableName . '.' . $tableColumn;
+        // Convert into commas
+        foreach ($terms as $term) {
+            // convert into a space delimited array
+            $names = explode(' ', $term);
+            // filter empty array elements, in an attempt to better handle spaces after `,`.
+            $filteredNames = array_filter($names);
+
+            foreach ($filteredNames as $searchName) {
+                $i++;
+                if (!isset($filteredNames[0])) {
+                    $j = 1;
+                }
+                // store searchName array
+                $searchNames[] = $searchName;
+
+                // Not like, or like?
+                if (substr($searchName, 0, 1) == '-') {
+                    if ($i == 1) {
+                        $body .= " AND ( $tableAndColumn NOT RLIKE (:search$i) ";
+                        $params['search' . $i] = preg_quote(ltrim(($searchName), '-'));
+                    } elseif ( (count($filteredNames) > 1 && $filteredNames[$j] != $searchName) || strpos($searchNames[$i-1], '-') !== false ) {
+                        $body .= " AND $tableAndColumn NOT RLIKE (:search$i) ";
+                        $params['search' . $i] = preg_quote(ltrim(($searchName), '-'));
+                    } else {
+                        $body .= " OR $tableAndColumn NOT RLIKE (:search$i) ";
+                        $params['search' . $i] = preg_quote(ltrim(($searchName), '-'));
+                    }
+                } else {
+                    if ($i === 1) {
+                        $body .= " AND ( $tableAndColumn RLIKE (:search$i) ";
+                        $params['search' . $i] = preg_quote($searchName);
+                    } elseif (count($filteredNames) > 1 && $filteredNames[$j] != $searchName) {
+                        $body .= " AND $tableAndColumn RLIKE (:search$i) ";
+                        $params['search' . $i] = preg_quote($searchName);
+                    } else {
+                        $body .= " OR  $tableAndColumn RLIKE (:search$i) ";
+                        $params['search' . $i] = preg_quote($searchName);
+                    }
+                }
+            }
+        }
+        $body .= ' ) ';
+    }
+
+    /**
+     * @param array $tags An array of tags
+     * @param string $operator exactTags passed from factory, determines if the search is LIKE or =
+     * @param string $body Current SQL body passed by reference
+     * @param array $params Array of parameters passed by reference
+     */
+    public function tagFilter($tags, $operator, &$body, &$params)
+    {
+        $i = 0;
+
+        foreach ($tags as $tag) {
+            $i++;
+
+            $tagV = explode('|', $tag);
+
+            // search tag without value
+            if (!isset($tagV[1])) {
+                if ($i == 1) {
+                    $body .= ' WHERE `tag` ' . $operator . ' :tags' . $i;
+                } else {
+                    $body .= ' OR `tag` ' . $operator . ' :tags' . $i;
+                }
+
+                if ($operator === '=') {
+                    $params['tags' . $i] = $tag;
+                } else {
+                    $params['tags' . $i] = '%' . $tag . '%';
+                }
+                // search tag only by value
+            } elseif ($tagV[0] == '') {
+                if ($i == 1) {
+                    $body .= ' WHERE `value` ' . $operator . ' :value' . $i;
+                } else {
+                    $body .= ' OR `value` ' . $operator . ' :value' . $i;
+                }
+
+                if ($operator === '=') {
+                    $params['value' . $i] = $tagV[1];
+                } else {
+                    $params['value' . $i] = '%' . $tagV[1] . '%';
+                }
+                // search tag by both tag and value
+            } else {
+                if ($i == 1) {
+                    $body .= ' WHERE `tag` ' . $operator . ' :tags' . $i .
+                        ' AND value ' . $operator . ' :value' . $i;
+                } else {
+                    $body .= ' OR `tag` ' . $operator . ' :tags' . $i .
+                        ' AND value ' . $operator . ' :value' . $i;
+                }
+
+                if ($operator === '=') {
+                    $params['tags' . $i] = $tagV[0];
+                    $params['value' . $i] = $tagV[1];
+                } else {
+                    $params['tags' . $i] = '%' . $tagV[0] . '%';
+                    $params['value' . $i] = '%' . $tagV[1] . '%';
+                }
+            }
+        }
+        $body .= ' ) ';
     }
 }

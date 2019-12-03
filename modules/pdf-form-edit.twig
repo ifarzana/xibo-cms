@@ -13,85 +13,6 @@
     {% trans "Edit PDF" %}
 {% endblock %}
 
-{% block formButtons %}
-    {% trans "Cancel" %}, XiboDialogClose()
-    {% trans "Save" %}, $("#audioEditForm").submit()
-{% endblock %}
-
-{% block formFieldActions %}
-    [{
-    "field": "duration",
-    "trigger": "init",
-    "value": "0",
-    "operation": "equals",
-    "actions": {
-    ".loop-fields": { "display": "none" }
-    }
-    },{
-    "field": "duration",
-    "trigger": "change",
-    "value": "0",
-    "operation": "equals",
-    "actions": {
-    ".loop-fields": { "display": "none" }
-    }
-    },{
-    "field": "duration",
-    "trigger": "init",
-    "value": "0",
-    "operation": "not",
-    "actions": {
-    ".loop-fields": { "display": "block" }
-    }
-    },{
-    "field": "duration",
-    "trigger": "change",
-    "value": "0",
-    "operation": "not",
-    "actions": {
-    ".loop-fields": { "display": "block" }
-    }
-    },{
-    "field": "useDuration",
-    "trigger": "init",
-    "value": false,
-    "operation": "is:checked",
-    "actions": {
-    ".duration-fields": { "display": "none" },
-    ".loop-fields": { "display": "none" }
-    }
-    },{
-    "field": "useDuration",
-    "trigger": "change",
-    "value": false,
-    "operation": "is:checked",
-    "actions": {
-    ".duration-fields": { "display": "none" },
-    ".loop-fields": { "display": "none" }
-    }
-    },{
-    "field": "useDuration",
-    "trigger": "init",
-    "value": true,
-    "operation": "is:checked",
-    "actions": {
-    ".duration-fields": { "display": "block" },
-    ".loop-fields": { "display": "block" }
-    }
-    },{
-    "field": "useDuration",
-    "trigger": "change",
-    "value": true,
-    "operation": "is:checked",
-    "actions": {
-    ".duration-fields": { "display": "block" },
-    ".loop-fields": { "display": "block" }
-    }
-    }]
-{% endblock %}
-
-{% block callBack %}mediaEditFormOpen{% endblock %}
-
 {% block formHtml %}
     <div class="row">
         <div class="col-md-12">
@@ -108,6 +29,18 @@
                 {% set helpText %}{% trans "The duration in seconds this should be displayed" %}{% endset %}
                 {{ forms.number("duration", title, module.getDuration(), helpText, "duration-fields", "required") }}
 
+                {% set title %}{% trans "Enable Stats Collection?" %}{% endset %}
+                {% set helpText %}{% trans "Enable the collection of Proof of Play statistics for this Widget. Ensure that ‘Enable Stats Collection’ is set to ‘On’ in the Display Settings." %}{% endset %}
+
+                {% set offOption %}{% trans "Off" %}{% endset %}
+                {% set onOption %}{% trans "On" %}{% endset %}
+                {% set inheritOption %}{% trans "Inherit" %}{% endset %}
+                {% set options = [
+                    { id: "Off", value: offOption },
+                    { id: "On", value: onOption },
+                    { id: "Inherit", value: inheritOption }
+                ] %}
+                {{ forms.dropdown("enableStat", "single", title, module.getOption("enableStat", theme.getSetting("WIDGET_STATS_ENABLED_DEFAULT") ), options, "id", "value", helpText) }}
             </form>
         </div>
     </div>

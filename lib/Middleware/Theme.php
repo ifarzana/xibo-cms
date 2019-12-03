@@ -48,7 +48,7 @@ class Theme extends Middleware
         /* @var \Twig_Loader_Filesystem $twig */
 
         // Append the module view paths
-        $twig->setPaths(array_merge($app->moduleFactory->getViewPaths(), [PROJECT_ROOT . '/views']));
+        $twig->setPaths(array_merge($app->moduleFactory->getViewPaths(), [PROJECT_ROOT . '/views', PROJECT_ROOT . '/custom', PROJECT_ROOT . '/reports']));
 
         // Does this theme provide an alternative view path?
         if ($app->configService->getThemeConfig('view_path') != '') {
@@ -89,7 +89,7 @@ class Theme extends Middleware
                 'validImageExt' => implode('|', $app->moduleFactory->getValidExtensions(['type' => 'image']))
             ],
             'ckeditorConfig' => $app->container->get('\Xibo\Controller\Library')->setApp($app, false)->fontCKEditorConfig(),
-            'version' => VERSION
+            'version' => Environment::$WEBSITE_VERSION_NAME
         ));
     }
 }

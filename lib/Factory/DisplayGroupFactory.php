@@ -52,6 +52,25 @@ class DisplayGroupFactory extends BaseFactory
     }
 
     /**
+     * @param int|null $userId
+     * @param int $bandwidthLimit
+     * @return DisplayGroup
+     */
+    public function create($userId = null, $bandwidthLimit = 0)
+    {
+        $displayGroup = $this->createEmpty();
+
+        if ($userId === null) {
+            $userId = $this->getUserFactory()->getSystemUser()->userId;
+        }
+
+        $displayGroup->userId = $userId;
+        $displayGroup->bandwidthLimit = $bandwidthLimit;
+
+        return $displayGroup;
+    }
+
+    /**
      * Create Empty
      * @return DisplayGroup
      */
@@ -131,6 +150,16 @@ class DisplayGroupFactory extends BaseFactory
     }
 
     /**
+     * @param string $tag
+     * @return DisplayGroup[]
+     * @throws NotFoundException
+     */
+    public function getByTag($tag)
+    {
+        return $this->query(null, ['disableUserCheck' => 1, 'tags' => $tag, 'exactTags' => 1, 'isDisplaySpecific' => 1]);
+    }
+
+    /**
      * Get Relationship Tree
      * @param $displayGroupId
      * @return DisplayGroup[]
@@ -175,6 +204,16 @@ class DisplayGroupFactory extends BaseFactory
     }
 
     /**
+     * Get by OwnerId
+     * @param int $ownerId
+     * @return DisplayGroup[]
+     */
+    public function getByOwnerId($ownerId)
+    {
+        return $this->query(null, ['userId' => $ownerId, 'isDisplaySpecific' => 0]);
+    }
+
+    /**
      * @param array $sortOrder
      * @param array $filterBy
      * @return array[DisplayGroup]
@@ -194,6 +233,8 @@ class DisplayGroupFactory extends BaseFactory
                 `displaygroup`.description,
                 `displaygroup`.isDynamic,
                 `displaygroup`.dynamicCriteria,
+                `displaygroup`.dynamicCriteriaTags,
+                `displaygroup`.bandwidthLimit,
                 `displaygroup`.userId,
                 (
                   SELECT GROUP_CONCAT(DISTINCT tag) 
@@ -202,7 +243,15 @@ class DisplayGroupFactory extends BaseFactory
                       ON lktagdisplaygroup.tagId = tag.tagId 
                    WHERE lktagdisplaygroup.displayGroupId = displaygroup.displayGroupID 
                   GROUP BY lktagdisplaygroup.displayGroupId
-                ) AS tags 
+                ) AS tags,
+                (
+                  SELECT GROUP_CONCAT(IFNULL(value, \'NULL\')) 
+                    FROM tag 
+                      INNER JOIN lktagdisplaygroup 
+                      ON lktagdisplaygroup.tagId = tag.tagId 
+                   WHERE lktagdisplaygroup.displayGroupId = displaygroup.displayGroupID 
+                  GROUP BY lktagdisplaygroup.displayGroupId
+                ) AS tagValues  
         ';
 
         $body = '
@@ -240,6 +289,11 @@ class DisplayGroupFactory extends BaseFactory
         if ($this->getSanitizer()->getInt('parentId', $filterBy) !== null) {
             $body .= ' AND `displaygroup`.displayGroupId IN (SELECT `childId` FROM `lkdgdg` WHERE `parentId` = :parentId AND `depth` = 1) ';
             $params['parentId'] = $this->getSanitizer()->getInt('parentId', $filterBy);
+        }
+
+        if ($this->getSanitizer()->getInt('userId', $filterBy) !== null) {
+            $body .= ' AND `displaygroup`.userId = :userId ';
+            $params['userId'] = $this->getSanitizer()->getInt('userId', $filterBy);
         }
 
         if ($this->getSanitizer()->getInt('isDisplaySpecific', 0, $filterBy) != -1) {
@@ -282,22 +336,8 @@ class DisplayGroupFactory extends BaseFactory
 
         // Filter by DisplayGroup Name?
         if ($this->getSanitizer()->getString('displayGroup', $filterBy) != null) {
-            // convert into a space delimited array
-            $names = explode(' ', $this->getSanitizer()->getString('displayGroup', $filterBy));
-
-            $i = 0;
-            foreach ($names as $searchName) {
-                $i++;
-                // Not like, or like?
-                if (substr($searchName, 0, 1) == '-') {
-                    $body .= " AND  `displaygroup`.displayGroup NOT LIKE :search$i ";
-                    $params['search' . $i] = '%' . ltrim(($searchName), '-') . '%';
-                }
-                else {
-                    $body .= " AND  `displaygroup`.displayGroup LIKE :search$i ";
-                    $params['search' . $i] = '%' . $searchName . '%';
-                }
-            }
+            $terms = explode(',', $this->getSanitizer()->getString('displayGroup', $filterBy));
+            $this->nameFilter('displaygroup', 'displayGroup', $terms, $body, $params);
         }
 
         // Tags
@@ -322,29 +362,51 @@ class DisplayGroupFactory extends BaseFactory
                     INNER JOIN `lktagdisplaygroup`
                     ON `lktagdisplaygroup`.tagId = tag.tagId
                 ";
-                $i = 0;
-                foreach (explode(',', $tagFilter) as $tag) {
-                    $i++;
 
-                    if ($i == 1)
-                        $body .= ' WHERE `tag` ' . $operator . ' :tags' . $i;
-                    else
-                        $body .= ' OR `tag` ' . $operator . ' :tags' . $i;
+                $tags = explode(',', $tagFilter);
+                $this->tagFilter($tags, $operator, $body, $params);
+            }
+        }
 
-                    if ($operator === '=')
-                        $params['tags' . $i] = $tag;
-                    else
-                        $params['tags' . $i] = '%' . $tag . '%';
+        if ($this->getSanitizer()->getInt('displayGroupIdMembers', $filterBy) !== null) {
+            $members = [];
+            foreach ($this->getStore()->select($select . $body, $params) as $row) {
+                $displayGroupId = $this->getSanitizer()->int($row['displayGroupId']);
+                $parentId = $this->getSanitizer()->getInt('displayGroupIdMembers', $filterBy);
+
+                if ($this->getStore()->exists('SELECT `childId` FROM `lkdgdg` WHERE `parentId` = :parentId AND `childId` = :childId AND `depth` = 1',
+                    [
+                        'parentId' => $parentId,
+                        'childId' => $displayGroupId
+                    ]
+                )) {
+                    $members[] = $displayGroupId;
                 }
-
-                $body .= " ) ";
             }
         }
 
         // Sorting?
         $order = '';
-        if (is_array($sortOrder))
+
+        if (isset($members) && $members != []) {
+            $sqlOrderMembers = 'ORDER BY FIELD(displaygroup.displayGroupId,' . implode(',', $members) . ')';
+
+            foreach ($sortOrder as $sort) {
+                if ($sort == '`member`') {
+                    $order .= $sqlOrderMembers;
+                    continue;
+                }
+
+                if ($sort == '`member` DESC') {
+                    $order .= $sqlOrderMembers . ' DESC';
+                    continue;
+                }
+            }
+        }
+
+        if (is_array($sortOrder) && ($sortOrder != ['`member`'] && $sortOrder != ['`member` DESC'] )) {
             $order .= 'ORDER BY ' . implode(',', $sortOrder);
+        }
 
         $limit = '';
         // Paging

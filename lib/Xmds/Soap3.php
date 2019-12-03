@@ -47,7 +47,7 @@ class Soap3 extends Soap
         $hardwareKey = $this->getSanitizer()->string($hardwareKey);
 
         // Check the serverKey matches the one we have
-        if ($serverKey != $this->getConfig()->GetSetting('SERVER_KEY'))
+        if ($serverKey != $this->getConfig()->getSetting('SERVER_KEY'))
             throw new \SoapFault('Sender', 'The Server key you entered does not match with the server key at this address');
 
         // Check the Length of the hardwareKey
@@ -57,6 +57,10 @@ class Soap3 extends Soap
         // Check in the database for this hardwareKey
         try {
             $display = $this->displayFactory->getByLicence($hardwareKey);
+
+            if (!$display->isDisplaySlotAvailable()) {
+                $display->licensed = 0;
+            }
 
             $this->logProcessor->setDisplay($display->displayId, ($display->isAuditing()));
 
@@ -123,22 +127,26 @@ class Soap3 extends Soap
         $chunkOffset = $this->getSanitizer()->int($chunkOffset);
         $chunkSize = $this->getSanitizer()->int($chunkSize);
 
-        $libraryLocation = $this->getConfig()->GetSetting("LIBRARY_LOCATION");
+        $libraryLocation = $this->getConfig()->getSetting("LIBRARY_LOCATION");
 
         // Check the serverKey matches
-        if ($serverKey != $this->getConfig()->GetSetting('SERVER_KEY'))
+        if ($serverKey != $this->getConfig()->getSetting('SERVER_KEY')) {
             throw new \SoapFault('Sender', 'The Server key you entered does not match with the server key at this address');
-
-        // Make sure we are sticking to our bandwidth limit
-        if (!$this->checkBandwidth())
-            throw new \SoapFault('Receiver', "Bandwidth Limit exceeded");
+        }
 
         // Authenticate this request...
-        if (!$this->authDisplay($hardwareKey))
+        if (!$this->authDisplay($hardwareKey)) {
             throw new \SoapFault('Receiver', "This display client is not licensed");
+        }
 
-        if ($this->display->isAuditing())
+        // Now that we authenticated the Display, make sure we are sticking to our bandwidth limit
+        if (!$this->checkBandwidth($this->display->displayId)) {
+            throw new \SoapFault('Receiver', "Bandwidth Limit exceeded");
+        }
+
+        if ($this->display->isAuditing()) {
             $this->getLog()->debug("[IN] Params: [$hardwareKey] [$filePath] [$fileType] [$chunkOffset] [$chunkSize]");
+        }
 
         $file = null;
 

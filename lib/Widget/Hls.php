@@ -11,7 +11,6 @@ namespace Xibo\Widget;
 
 use Respect\Validation\Validator as v;
 use Xibo\Exception\InvalidArgumentException;
-use Xibo\Exception\XiboException;
 use Xibo\Factory\ModuleFactory;
 
 /**
@@ -20,6 +19,7 @@ use Xibo\Factory\ModuleFactory;
  */
 class Hls extends ModuleWidget
 {
+
     public $codeSchemaVersion = 1;
 
     /** @inheritdoc */
@@ -27,6 +27,14 @@ class Hls extends ModuleWidget
     {
         // Initialise extra validation rules
         v::with('Xibo\\Validation\\Rules\\');
+    }
+
+    /**
+     * Javascript functions for the layout designer
+     */
+    public function layoutDesignerJavaScript()
+    {
+        return 'hls-designer-javascript';
     }
 
     /**
@@ -42,7 +50,6 @@ class Hls extends ModuleWidget
             $module->type = 'hls';
             $module->class = 'Xibo\Widget\Hls';
             $module->description = 'HLS Video Stream';
-            $module->imageUri = 'forms/library.gif';
             $module->enabled = 1;
             $module->previewEnabled = 1;
             $module->assignable = 1;
@@ -51,6 +58,7 @@ class Hls extends ModuleWidget
             $module->schemaVersion = $this->codeSchemaVersion;
             $module->defaultDuration = 60;
             $module->settings = [];
+            $module->installName = 'hls';
 
             $this->setModule($module);
             $this->installModule();
@@ -69,17 +77,18 @@ class Hls extends ModuleWidget
     }
 
     /**
-     * Adds a HLS Widget
-     * @SWG\Post(
-     *  path="/playlist/widget/hls/{playlistId}",
-     *  operationId="WidgetHlsAdd",
+     * Edit Widget
+     *
+     * @SWG\Put(
+     *  path="/playlist/widget/{widgetId}?hls",
+     *  operationId="WidgetHlsEdit",
      *  tags={"widget"},
-     *  summary="Add a HLS Widget",
-     *  description="Add a new HLS Widget to the specified playlist",
+     *  summary="Edit a HLS Widget",
+     *  description="Edit HLS Widget. This call will replace existing Widget object, all not supplied parameters will be set to default.",
      *  @SWG\Parameter(
-     *      name="playlistId",
+     *      name="widgetId",
      *      in="path",
-     *      description="The playlist ID to add a Widget to",
+     *      description="The WidgetId to Edit",
      *      type="integer",
      *      required=true
      *   ),
@@ -93,7 +102,7 @@ class Hls extends ModuleWidget
      *  @SWG\Parameter(
      *      name="useDuration",
      *      in="formData",
-     *      description="Edit Only - (0, 1) Select only if you will provide duration parameter as well",
+     *      description="Select only if you will provide duration parameter as well",
      *      type="integer",
      *      required=false
      *  ),
@@ -104,6 +113,13 @@ class Hls extends ModuleWidget
      *      type="integer",
      *      required=false
      *  ),
+     *  @SWG\Parameter(
+     *      name="enableStat",
+     *      in="formData",
+     *      description="The option (On, Off, Inherit) to enable the collection of Widget Proof of Play statistics",
+     *      type="string",
+     *      required=false
+     *   ),
      *  @SWG\Parameter(
      *      name="uri",
      *      in="formData",
@@ -126,84 +142,44 @@ class Hls extends ModuleWidget
      *      required=false
      *   ),
      *  @SWG\Response(
-     *      response=201,
-     *      description="successful operation",
-     *      @SWG\Schema(ref="#/definitions/Widget"),
-     *      @SWG\Header(
-     *          header="Location",
-     *          description="Location of the new widget",
-     *          type="string"
-     *      )
+     *      response=204,
+     *      description="successful operation"
      *  )
      * )
-     */
-    public function add()
-    {
-        $this->setCommonOptions();
-        $this->validate();
-
-        // Save the widget
-        $this->saveWidget();
-    }
-
-    /**
-     * Edit Media
+     *
+     * @throws \Xibo\Exception\XiboException
      */
     public function edit()
     {
-        $this->setCommonOptions();
-        $this->validate();
+        $this->setDuration($this->getSanitizer()->getInt('duration', $this->getDuration()));
+        $this->setUseDuration($this->getSanitizer()->getCheckbox('useDuration'));
+        $this->setOption('name', $this->getSanitizer()->getString('name'));
+        $this->setOption('enableStat', $this->getSanitizer()->getString('enableStat'));
+        $this->setOption('uri', urlencode($this->getSanitizer()->getString('uri')));
+        $this->setOption('mute', $this->getSanitizer()->getCheckbox('mute'));
+
+        // This causes some android devices to switch to a hardware accellerated web view
+        $this->setOption('transparency', 0);
+
+        $this->isValid();
 
         // Save the widget
         $this->saveWidget();
     }
 
-    /**
-     * Validate
-     * @throws XiboException
-     */
-    private function validate()
+    /** @inheritdoc */
+    public function isValid()
     {
         if ($this->getUseDuration() == 1 && $this->getDuration() == 0)
             throw new InvalidArgumentException(__('Please enter a duration'), 'duration');
 
         if (!v::url()->notEmpty()->validate(urldecode($this->getOption('uri'))))
             throw new InvalidArgumentException(__('Please enter a link'), 'uri');
+
+        return self::$STATUS_VALID;
     }
 
-    /**
-     * Set common options
-     */
-    private function setCommonOptions()
-    {
-        $this->setDuration($this->getSanitizer()->getInt('duration', $this->getDuration()));
-        $this->setUseDuration($this->getSanitizer()->getCheckbox('useDuration'));
-        $this->setOption('name', $this->getSanitizer()->getString('name'));
-        $this->setOption('uri', urlencode($this->getSanitizer()->getString('uri')));
-        $this->setOption('mute', $this->getSanitizer()->getCheckbox('mute'));
-
-        // This causes some android devices to switch to a hardware accellerated web view
-        $this->setOption('transparency', 0);
-    }
-
-    /**
-     * @inheritdoc
-     */
-    public function isValid()
-    {
-        // Using the information you have in your module calculate whether it is valid or not.
-        // 0 = Invalid
-        // 1 = Valid
-        // 2 = Unknown
-        return 1;
-    }
-
-    /**
-     * GetResource
-     * Return the rendered resource to be used by the client (or a preview) for displaying this content.
-     * @param integer $displayId If this comes from a real client, this will be the display id.
-     * @return mixed
-     */
+    /** @inheritdoc */
     public function getResource($displayId = 0)
     {
         // Ensure we have the necessary files linked up

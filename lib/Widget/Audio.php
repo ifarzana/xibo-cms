@@ -11,14 +11,31 @@ namespace Xibo\Widget;
 
 class Audio extends ModuleWidget
 {
+
+    /**
+     * Javascript functions for the layout designer
+     */
+    public function layoutDesignerJavaScript()
+    {
+        // We use the same javascript as the data set view designer
+        return 'audio-designer-javascript';
+    }
+
     /**
      * Edit an Audio Widget
-     * @SWG\Post(
+     * @SWG\Put(
      *  path="/playlist/widget/audio/{playlistId}",
      *  operationId="WidgetAudioEdit",
      *  tags={"widget"},
      *  summary="Parameters for editing existing audio widget on a layout",
      *  description="Parameters for editing existing audio widget on a layout, for adding new audio, please refer to POST /library documentation",
+     *  @SWG\Parameter(
+     *      name="playlistId",
+     *      in="path",
+     *      description="The Playlist ID",
+     *      type="integer",
+     *      required=true
+     *  ),
      *  @SWG\Parameter(
      *      name="useDuration",
      *      in="formData",
@@ -54,6 +71,13 @@ class Audio extends ModuleWidget
      *      type="integer",
      *      required=false
      *   ),
+     *  @SWG\Parameter(
+     *      name="enableStat",
+     *      in="formData",
+     *      description="The option (On, Off, Inherit) to enable the collection of Widget Proof of Play statistics",
+     *      type="string",
+     *      required=false
+     *   ),
      *  @SWG\Response(
      *      response=201,
      *      description="successful operation",
@@ -73,12 +97,15 @@ class Audio extends ModuleWidget
         $this->setDuration($this->getSanitizer()->getInt('duration', $this->getDuration()));
         $this->setOption('name', $this->getSanitizer()->getString('name'));
         $this->setOption('mute', $this->getSanitizer()->getCheckbox('mute'));
+        $this->setOption('enableStat', $this->getSanitizer()->getString('enableStat'));
 
         // Only loop if the duration is > 0
-        if ($this->getUseDuration() == 0 || $this->getDuration() == 0)
+        if ($this->getUseDuration() == 0 || $this->getDuration() == 0) {
+            $this->setDuration(0);
             $this->setOption('loop', 0);
-        else
+        } else {
             $this->setOption('loop', $this->getSanitizer()->getCheckbox('loop'));
+        }
 
         $this->saveWidget();
     }
@@ -131,13 +158,9 @@ class Audio extends ModuleWidget
         $this->download();
     }
 
-    /**
-     * Is this module valid
-     * @return int
-     */
+    /** @inheritdoc */
     public function isValid()
     {
-        // Yes
-        return 1;
+        return self::$STATUS_PLAYER;
     }
 }

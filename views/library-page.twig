@@ -11,7 +11,9 @@
 
 {% block actionMenu %}
     <ul class="nav nav-pills pull-right">
-    <li class="btn btn-success btn-xs"><a class="btns" href="#" id="libraryUploadForm" title="{% trans "Add a new media item to the library" %}"><i class="fa fa-plus-circle" aria-hidden="true"></i> {% trans "Add Media" %}</a></li>
+        <li class="btn btn-success btn-xs"><a class="btns" href="#" id="libraryUploadForm" title="{% trans "Add a new media item to the library" %}"><i class="fa fa-plus-circle" aria-hidden="true"></i> {% trans "Add Media" %}</a></li>
+        <li class="btn btn-success btn-xs"><a class="XiboFormButton btns" title="{% trans "Add a new media item to the library via external URL" %}" href="{{ urlFor("library.uploadUrl.form") }}"> <i class="fa fa-plus-circle" aria-hidden="true"></i> {% trans "Add media (URL)" %}</a></li>
+
         {% if settings.SETTING_LIBRARY_TIDY_ENABLED == 1 %}
             <li class="btn btn-danger btn-xs"><a class="XiboFormButton btns" title="{% trans "Run through the library and remove unused and unnecessary files" %}" href="{{ urlFor("library.tidy.form") }}"> <i class="fa fa-trash" aria-hidden="true"></i> {% trans "Tidy Library" %}</a></li>
         {% endif %}
@@ -27,12 +29,18 @@
                 <div class="XiboFilter well">
                     <div class="FilterDiv" id="Filter">
                         <form class="form-inline">
+                            {% set title %}{% trans "ID" %}{% endset %}
+                            {{ inline.number("mediaId", title) }}
+
                             {% set title %}{% trans "Name" %}{% endset %}
                             {{ inline.input("media", title) }}
 
                             {% set title %}{% trans "Tags" %}{% endset %}
-                            {% set helpText %}{% trans "A comma separated list of tags to filter by. Enter --no-tag to see items without tags." %}{% endset %}
+                            {% set helpText %}{% trans "A comma separated list of tags to filter by. Enter a Tag value preceded with | to filter by Tag values. Enter --no-tag to see items without tags." %}{% endset %}
                             {{ inline.inputWithTags("tags", title, null, helpText) }}
+
+                            {% set title %}{% trans "Exact match?" %}{% endset %}
+                            {{ inline.checkbox("exactTags", title) }}
 
                             {% set attributes = [
                                 { name: "data-allow-clear", value: "true" },
@@ -73,10 +81,13 @@
                                 <th>{% trans "Owner" %}</th>
                                 <th>{% trans "Permissions" %}</th>
                                 <th>{% trans "Revised" %}</th>
+                                <th>{% trans "Released" %}</th>
                                 <th>{% trans "File Name" %}</th>
+                                <th>{% trans "Stats?" %}</th>
                                 <th>{% trans "Created" %}</th>
                                 <th>{% trans "Modified" %}</th>
-                                <th></th>
+                                <th>{% trans "Expires" %}</th>
+                                <th>{% trans "Row Menu" %}</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -97,7 +108,7 @@
                 "language": dataTablesLanguage,
                 serverSide: true, stateSave: true, stateDuration: 0,
                 stateLoadCallback: function (settings, callback) {
-                    var data;
+                    var data = {};
                     $.ajax({
                         type: "GET",
                         async: false,
@@ -172,7 +183,41 @@
                         "render": dataTableCreatePermissions
                     },
                     {"data": "revised", "render": dataTableTickCrossColumn, "visible": false},
+                    {
+                        "name": "released",
+                        "data": function (data, type) {
+                            if (type != "display")
+                                return data.released;
+
+                            var icon = "";
+                            if (data.released == 1)
+                                icon = "fa-check";
+                            else if (data.released == 0)
+                                icon = "fa-cogs";
+                            else if (data.released == 2)
+                                icon = "fa-times";
+
+
+                            return "<span class='fa " + icon + "' title='" + (data.releasedDescription) + "'></span>";
+                        },
+                        "visible": false
+                    },
                     {"data": "fileName"},
+                    {
+                        "name": "enableStat",
+                        "data": function (data) {
+
+                            var icon = "";
+                            if (data.enableStat == 'On')
+                                icon = "fa-check";
+                            else if (data.enableStat == 'Off')
+                                icon = "fa-times";
+                            else
+                                icon = "fa-level-down";
+
+                            return "<span class='fa " + icon + "' title='" + (data.enableStatDescription) + "'></span>";
+                        }
+                    },
                     {
                         "data": "createdDt",
                         "render": dataTableDateFromIso,
@@ -182,6 +227,26 @@
                         "data": "modifiedDt",
                         "render": dataTableDateFromIso,
                         "visible": false
+                    },
+                    {
+                        "name": "expires",
+                        "data": function (data, type) {
+                            if (data.expires != null && data.expires != 0) {
+                                let now = moment();
+                                let expiresIn = moment.unix(data.expires);
+                                let differenceMinutes = expiresIn.diff(now, 'minutes');
+                                let momentDifference = moment(now).to(expiresIn);
+
+                                if (differenceMinutes < -10 ) {
+                                    return data.mediaExpiryFailed;
+                                } else {
+                                    return data.mediaExpiresIn.replace('%s', momentDifference);
+                                }
+                            } else {
+                                return data.mediaNoExpiryDate;
+                            }
+
+                        }
                     },
                     {
                         "orderable": false,
@@ -208,10 +273,10 @@
                 upload: {
                     maxSize: {{ libraryUpload.maxSize }},
                     maxSizeMessage: "{{ libraryUpload.maxSizeMessage  }}",
-                    validExt: "{{ libraryUpload.validExt }}"
+                    validExt: "{{ validExt }}"
                 },
-                updateInAllChecked: {% if settings.LIBRARY_MEDIA_UPDATEINALL_CHECKB == "Checked" %}true{% else %}false{% endif %},
-                deleteOldRevisionsChecked: {% if settings.LIBRARY_MEDIA_DELETEOLDVER_CHECKB == "Checked" %}true{% else %}false{% endif %}
+                updateInAllChecked: {% if settings.LIBRARY_MEDIA_UPDATEINALL_CHECKB == 1 %}true{% else %}false{% endif %},
+                deleteOldRevisionsChecked: {% if settings.LIBRARY_MEDIA_DELETEOLDVER_CHECKB == 1 %}true{% else %}false{% endif %}
             });
         });
 
@@ -232,8 +297,8 @@
                 // Open the upload dialog with our options.
                 openUploadForm({
                     oldMediaId: mediaId,
-                    updateInAllChecked: {% if settings.LIBRARY_MEDIA_UPDATEINALL_CHECKB == "Checked" %}true{% else %}false{% endif %},
-                    deleteOldRevisionsChecked: {% if settings.LIBRARY_MEDIA_DELETEOLDVER_CHECKB == "Checked" %}true{% else %}false{% endif %},
+                    updateInAllChecked: {% if settings.LIBRARY_MEDIA_UPDATEINALL_CHECKB == 1 %}true{% else %}false{% endif %},
+                    deleteOldRevisionsChecked: {% if settings.LIBRARY_MEDIA_DELETEOLDVER_CHECKB == 1 %}true{% else %}false{% endif %},
                     trans: {
                         addFiles: "{% trans "Add Replacement" %}",
                         startUpload: "{% trans "Start Replace" %}",
@@ -284,16 +349,25 @@
                 // Configure the upload form
                 var url = "{{ urlFor("library.add") }}";
                 var form = $(this).find("form");
-                var refreshSessionInterval;
-
-                // Initialize the jQuery File Upload widget:
-                form.fileupload({
+                var options = {
                     url: url,
                     disableImageResize: true,
                     previewMaxWidth: 100,
                     previewMaxHeight: 100,
                     previewCrop: true
-                });
+                };
+                var refreshSessionInterval;
+
+                // Initialize the jQuery File Upload widget:
+                if(templateOptions.oldMediaId === undefined || templateOptions.oldMediaId === null) {
+                    form.fileupload(options);
+                } else {
+                    options = $.extend({}, options, {
+                        maxNumberOfFiles: 1,
+                        limitMultiFileUploads: 1
+                    });
+                    form.fileupload(options);
+                }
 
                 // Upload server status check for browsers with CORS support:
                 if ($.support.cors) {
@@ -326,6 +400,10 @@
 
                     inputs.filter("input").prop("disabled", true);
                 }).bind('fileuploadstart', function (e, data) {
+                    // Show progress data
+                    form.find('.fileupload-progress .progress-extended').show();
+                    form.find('.fileupload-progress .progress-end').hide();
+
                     if (form.fileupload("active") <= 0)
                         refreshSessionInterval = setInterval("XiboPing('" + pingUrl + "?refreshSession=true')", 1000 * 60 * 3);
 
@@ -333,6 +411,26 @@
                 }).bind('fileuploaddone', function (e, data) {
                     if (refreshSessionInterval != null && form.fileupload("active") <= 0)
                         clearInterval(refreshSessionInterval);
+                    if (templateOptions.oldMediaId !== undefined && templateOptions.oldMediaId !== null) {
+                        XiboDialogClose();
+                        table.ajax.reload();
+                    }
+                }).bind('fileuploadprogressall', function (e, data) {
+                    // Hide progress data and show processing
+                    if(data.total > 0 && data.loaded == data.total) {
+                        form.find('.fileupload-progress .progress-extended').hide();
+                        form.find('.fileupload-progress .progress-end').show();
+                    }
+                }).bind('fileuploadadded fileuploadcompleted fileuploadfinished', function (e, data) {
+                    // Get uploaded and downloaded files and toggle Done button
+                    var filesToUploadCount = form.find('tr.template-upload').length;
+                    var $button = form.parents('.modal:first').find('button[data-bb-handler="main"]');
+
+                    if(filesToUploadCount == 0) {
+                        $button.removeAttr('disabled');
+                    } else {
+                        $button.attr('disabled', 'disabled');
+                    }
                 });
             });
         }
@@ -406,14 +504,42 @@
 
             usageTableLayouts.on('draw', dataTableDraw);
             usageTableLayouts.on('processing.dt', dataTableProcessing);
+
+            // Tidy up timepickers on modal close
+            if(dialog.hasClass('modal')) {
+                dialog.on("hide.bs.modal", function(e) {
+                    if(e.namespace === 'bs.modal') {
+                            // Remove colour pickers
+                            dialog.find("#mediaEventDateLink").datetimepicker('remove');
+                    }
+                });
+            }
         }
 
         function setDefaultMultiSelectFormOpen(dialog) {
-            var $input = $('<input type=checkbox id="forceDelete" name="forceDelete"> {% trans %} Force delete from any existing layouts, assignments, etc {% endtrans %} </input>');
+            {% set message = 'Force delete from any existing layouts, assignments, etc' %}
+
+            var $input = $('<input type=checkbox id="forceDelete" name="forceDelete"> {{ message|trans|e }} </input>');
             $input.on('change', function() {
                 dialog.data().commitData = {forceDelete: $(this).val()};
             });
             $(dialog).find('.modal-body').append($input);
         }
+
+        function setEnableStatMultiSelectFormOpen(dialog) {
+
+            var $select = $('<select id="enableStat" name="enableStat" class="form-control">' +
+                '<option value="Off">{% trans %} Off {% endtrans %}</option>' +
+                '<option value="On">{% trans %} On {% endtrans %}</option>' +
+                '<option value="Inherit">{% trans %} Inherit {% endtrans %}</option>' +
+                '</select>');
+
+            $select.on('change', function() {
+                dialog.data().commitData = {enableStat: $(this).val()};
+            }).trigger('change');
+
+            $(dialog).find('.modal-body').append($select);
+        }
+
     </script>
 {% endblock %}

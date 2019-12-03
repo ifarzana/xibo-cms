@@ -45,8 +45,10 @@ class WidgetEditTest extends LocalWebTestCase
         // Create a Layout
         $this->layout = $this->createLayout();
 
-        // Add a couple of text widgets to the region
-        $response = $this->getEntityProvider()->post('/playlist/widget/text/' . $this->layout->regions[0]->playlists[0]['playlistId'], [
+        // Checkout
+        $layout = $this->getDraft($this->layout);
+
+        $response = $this->getEntityProvider()->post('/playlist/widget/text/' . $layout->regions[0]->regionPlaylist->playlistId, [
             'text' => 'Widget A',
             'duration' => 100,
             'useDuration' => 1
@@ -63,7 +65,7 @@ class WidgetEditTest extends LocalWebTestCase
         // Schedule the Layout "always" onto our display
         //  deleting the layout will remove this at the end
         $event = (new XiboSchedule($this->getEntityProvider()))->createEventLayout(
-            date('Y-m-d H:i:s', time()+3600),
+            date('Y-m-d H:i:s', time()),
             date('Y-m-d H:i:s', time()+7200),
             $this->layout->campaignId,
             [$this->display->displayGroupId],
@@ -71,6 +73,7 @@ class WidgetEditTest extends LocalWebTestCase
             NULL,
             NULL,
             NULL,
+            0,
             0,
             0
         );
@@ -102,12 +105,19 @@ class WidgetEditTest extends LocalWebTestCase
             'useDuration' => 1
         ], ['CONTENT_TYPE' => 'application/x-www-form-urlencoded']);
 
+        $this->assertEquals(200, $this->client->response->status(), 'Transaction Status Incorrect');
+
+        $this->assertTrue($this->displayStatusEquals($this->display, Display::$STATUS_DONE), 'Display Status isnt as expected');
+
+        // Check us in again
+        $this->layout = $this->publish($this->layout);
+
         // Check the Layout Status
         // Validate the layout status afterwards
-        $this->assertTrue($this->layoutStatusEquals($this->layout, 3), 'Layout Status isnt as expected');
+        $this->assertTrue($this->layoutStatusEquals($this->layout, 1), 'Layout Status isnt as expected');
 
         // Validate the display status afterwards
-        $this->assertTrue($this->displayStatusEquals($this->display, Display::$STATUS_DONE), 'Display Status isnt as expected');
+        $this->assertTrue($this->displayStatusEquals($this->display, Display::$STATUS_PENDING), 'Display Status isnt as expected');
 
         // Somehow test that we have issued an XMR request
         $this->assertFalse(in_array($this->display->displayId, $this->getPlayerActionQueue()), 'Player action not present');

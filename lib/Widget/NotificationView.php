@@ -8,6 +8,8 @@
 
 namespace Xibo\Widget;
 
+use Respect\Validation\Validator as v;
+use Xibo\Exception\InvalidArgumentException;
 use Xibo\Factory\NotificationFactory;
 
 /**
@@ -19,7 +21,7 @@ class NotificationView extends ModuleWidget
     /**
      * Install Files
      */
-    public function InstallFiles()
+    public function installFiles()
     {
         $this->mediaFactory->createModuleSystemFile(PROJECT_ROOT . '/modules/vendor/jquery-1.11.1.min.js')->save();
         $this->mediaFactory->createModuleSystemFile(PROJECT_ROOT . '/modules/xibo-layout-scaler.js')->save();
@@ -37,17 +39,18 @@ class NotificationView extends ModuleWidget
     }
 
     /**
-     * Adds an Notification Widget
-     * @SWG\Post(
-     *  path="/playlist/widget/notificationview/{playlistId}",
-     *  operationId="WidgetNotificationAdd",
+     * Edit Widget
+     *
+     * @SWG\Put(
+     *  path="/playlist/widget/{widgetId}?notificationView",
+     *  operationId="WidgetNotificationEdit",
      *  tags={"widget"},
-     *  summary="Add a Notification Widget",
-     *  description="Add a new Notification Widget to the specified playlist",
+     *  summary="Edit a Notification Widget",
+     *  description="Edit a Notification Widget. This call will replace existing Widget object, all not supplied parameters will be set to default.",
      *  @SWG\Parameter(
-     *      name="playlistId",
+     *      name="widgetId",
      *      in="path",
-     *      description="The playlist ID to add an Notification Widget",
+     *      description="The WidgetId to Edit",
      *      type="integer",
      *      required=true
      *   ),
@@ -73,6 +76,13 @@ class NotificationView extends ModuleWidget
      *      required=false
      *  ),
      *  @SWG\Parameter(
+     *      name="enableStat",
+     *      in="formData",
+     *      description="The option (On, Off, Inherit) to enable the collection of Widget Proof of Play statistics",
+     *      type="string",
+     *      required=false
+     *   ),
+     *  @SWG\Parameter(
      *      name="age",
      *      in="formData",
      *      description="The maximum notification age in minutes - 0 for all",
@@ -84,6 +94,13 @@ class NotificationView extends ModuleWidget
      *      in="formData",
      *      description="Message to show when no notifications are available",
      *      type="string",
+     *      required=false
+     *   ),
+     *  @SWG\Parameter(
+     *      name="noDataMessage_advanced",
+     *      in="formData",
+     *      description="A flag (0, 1), Should text area by presented as a visual editor?",
+     *      type="integer",
      *      required=false
      *   ),
      *  @SWG\Parameter(
@@ -115,40 +132,15 @@ class NotificationView extends ModuleWidget
      *      required=false
      *   ),
      *  @SWG\Response(
-     *      response=201,
-     *      description="successful operation",
-     *      @SWG\Schema(ref="#/definitions/Widget"),
-     *      @SWG\Header(
-     *          header="Location",
-     *          description="Location of the new widget",
-     *          type="string"
-     *      )
+     *      response=204,
+     *      description="successful operation"
      *  )
      * )
-     */
-    public function add()
-    {
-        $this->setCommonOptions();
-        $this->validate();
-        $this->saveWidget();
-    }
-
-    /**
-     * Edit Media in the Database
+     *
+     * @throws \Xibo\Exception\XiboException
      */
     public function edit()
     {
-        $this->setCommonOptions();
-        $this->validate();
-        $this->saveWidget();
-    }
-
-    /**
-     * Set common options from Request Params
-     */
-    private function setCommonOptions()
-    {
-
         $this->setDuration($this->getSanitizer()->getInt('duration', $this->getDuration()));
         $this->setUseDuration($this->getSanitizer()->getCheckbox('useDuration'));
         $this->setOption('name', $this->getSanitizer()->getString('name'));
@@ -156,22 +148,25 @@ class NotificationView extends ModuleWidget
         $this->setOption('effect', $this->getSanitizer()->getString('effect'));
         $this->setOption('speed', $this->getSanitizer()->getInt('speed'));
         $this->setOption('durationIsPerItem', $this->getSanitizer()->getCheckbox('durationIsPerItem'));
+        $this->setOption('enableStat', $this->getSanitizer()->getString('enableStat'));
         $this->setOption('updateInterval', $this->getSanitizer()->getInt('updateInterval', 60));
-        $this->setRawNode('noDataMessage', $this->getSanitizer()->getParam('noDataMessage', null));
+        $this->setRawNode('noDataMessage', $this->getSanitizer()->getParam('noDataMessage', null));        
+        $this->setOption('noDataMessage_advanced', $this->getSanitizer()->getCheckbox('noDataMessage_advanced'));
         $this->setRawNode('template', $this->getSanitizer()->getParam('template', null));
+        $this->setRawNode('template_advanced', $this->getSanitizer()->getParam('template_advanced', null));
         $this->setRawNode('embedStyle', $this->getSanitizer()->getParam('embedStyle', null));
-    }
 
-    private function validate()
-    {
-
+        $this->saveWidget();
     }
 
     /** @inheritdoc */
     public function isValid()
     {
+        if ($this->getUseDuration() == 1 && !v::intType()->min(1)->validate($this->getDuration()))
+            throw new InvalidArgumentException(__('You must enter a duration.'), 'duration');
+
         // Can't be sure because the client does the rendering
-        return 2;
+        return self::$STATUS_PLAYER;
     }
 
     /**
@@ -190,7 +185,7 @@ class NotificationView extends ModuleWidget
     private function getNotifications($isPreview, $displayId = null)
     {
         // Date format
-        $dateFormat = $this->getOption('dateFormat', $this->getConfig()->GetSetting('DATE_FORMAT'));
+        $dateFormat = $this->getOption('dateFormat', $this->getConfig()->getSetting('DATE_FORMAT'));
         $age = $this->getOption('age', 0);
 
         // Parse the text template
@@ -295,9 +290,6 @@ class NotificationView extends ModuleWidget
             'speed' => $this->getOption('speed', 0),
             'originalWidth' => $this->region->width,
             'originalHeight' => $this->region->height,
-            'previewWidth' => $this->getSanitizer()->getDouble('width', 0),
-            'previewHeight' => $this->getSanitizer()->getDouble('height', 0),
-            'scaleOverride' => $this->getSanitizer()->getDouble('scale_override', 0),
             'marqueeInlineSelector' => $this->getOption('marqueeInlineSelector', '.item, .item p')
         );
 
@@ -346,6 +338,12 @@ class NotificationView extends ModuleWidget
     public function getCacheKey($displayId)
     {
         return $this->getWidgetId() . '_' . $displayId;
+    }
+
+    /** @inheritdoc */
+    public function isCacheDisplaySpecific()
+    {
+        return true;
     }
 
     /** @inheritdoc */

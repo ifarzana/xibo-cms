@@ -1,7 +1,7 @@
 <?php
 /*
  * Xibo - Digital Signage - http://www.xibo.org.uk
- * Copyright (C) 2018 Spring Signage Ltd
+ * Copyright (C) 2018 Xibo Signage Ltd
  *
  * This file is part of Xibo.
  *
@@ -54,7 +54,6 @@ class Calendar extends ModuleWidget
             $module->type = 'calendar';
             $module->class = '\Xibo\Widget\Calendar';
             $module->description = 'Display content from a Calendar';
-            $module->imageUri = 'forms/library.gif';
             $module->enabled = 1;
             $module->previewEnabled = 1;
             $module->assignable = 1;
@@ -63,6 +62,7 @@ class Calendar extends ModuleWidget
             $module->schemaVersion = 1;
             $module->defaultDuration = 60;
             $module->settings = [];
+            $module->installName = 'calendar';
 
             $this->setModule($module);
             $this->installModule();
@@ -87,18 +87,211 @@ class Calendar extends ModuleWidget
         return 'calendar-designer-javascript';
     }
 
-    /** @inheritdoc */
-    public function add()
-    {
-        $this->setDuration($this->getSanitizer()->getInt('duration', $this->getDuration()));
-        $this->setUseDuration($this->getSanitizer()->getCheckbox('useDuration'));
-        $this->setOption('uri', urlencode($this->getSanitizer()->getString('uri')));
-
-        $this->validate();
-        $this->saveWidget();
-    }
-
-    /** @inheritdoc */
+    /**
+     *
+     * @SWG\Put(
+     *  path="/playlist/widget/{widgetId}?calendar",
+     *  operationId="widgetCalendarEdit",
+     *  tags={"widget"},
+     *  summary="Edit a Calendar Widget",
+     *  description="Edit a Calendar Widget. This call will replace existing Widget object, all not supplied parameters will be set to default.",
+     *  @SWG\Parameter(
+     *      name="widgetId",
+     *      in="path",
+     *      description="The WidgetId to Edit",
+     *      type="integer",
+     *      required=true
+     *   ),
+     *  @SWG\Parameter(
+     *      name="name",
+     *      in="formData",
+     *      description="Optional Widget Name",
+     *      type="string",
+     *      required=false
+     *  ),
+     *  @SWG\Parameter(
+     *      name="duration",
+     *      in="formData",
+     *      description="The Widget Duration",
+     *      type="integer",
+     *      required=false
+     *  ),
+     *  @SWG\Parameter(
+     *      name="useDuration",
+     *      in="formData",
+     *      description="Select 1 only if you will provide duration parameter as well",
+     *      type="integer",
+     *      required=false
+     *  ),
+     *  @SWG\Parameter(
+     *      name="enableStat",
+     *      in="formData",
+     *      description="The option (On, Off, Inherit) to enable the collection of Widget Proof of Play statistics",
+     *      type="string",
+     *      required=false
+     *   ),
+     *  @SWG\Parameter(
+     *      name="uri",
+     *      in="formData",
+     *      description="The Link for the iCal Feed",
+     *      type="string",
+     *      required=true
+     *   ),
+     *  @SWG\Parameter(
+     *      name="customInterval",
+     *      in="formData",
+     *      description="Using natural language enter a string representing the period for which events should be returned, for example 2 days or 1 week.",
+     *      type="string",
+     *      required=false
+     *   ),
+     *  @SWG\Parameter(
+     *      name="dateFormat",
+     *      in="formData",
+     *      description="The date format to apply to all dates returned",
+     *      type="string",
+     *      required=false
+     *   ),
+     *  @SWG\Parameter(
+     *      name="numItems",
+     *      in="formData",
+     *      description="he number of items you want to display",
+     *      type="integer",
+     *      required=false
+     *   ),
+     *  @SWG\Parameter(
+     *      name="itemsPerPage",
+     *      in="formData",
+     *      description="When in single mode, how many items per page should be shown",
+     *      type="integer",
+     *      required=false
+     *   ),
+     *  @SWG\Parameter(
+     *      name="effect",
+     *      in="formData",
+     *      description="Effect that will be used to transitions between items, available options: fade, fadeout, scrollVert, scollHorz, flipVert, flipHorz, shuffle, tileSlide, tileBlind",
+     *      type="string",
+     *      required=false
+     *   ),
+     *  @SWG\Parameter(
+     *      name="durationIsPerItem",
+     *      in="formData",
+     *      description="A flag (0, 1), The duration specified is per page/item, otherwise the widget duration is divided between the number of pages/items",
+     *      type="integer",
+     *      required=false
+     *   ),
+     *  @SWG\Parameter(
+     *      name="itemsSideBySide",
+     *      in="formData",
+     *      description="A flag (0, 1), Should items be shown side by side",
+     *      type="integer",
+     *      required=false
+     *   ),
+     *  @SWG\Parameter(
+     *      name="useCurrentTemplate",
+     *      in="formData",
+     *      description="A flag (0, 1), Should current event use different template?",
+     *      type="integer",
+     *      required=false
+     *   ),
+     *  @SWG\Parameter(
+     *      name="excludeCurrent",
+     *      in="formData",
+     *      description="A flag (0, 1), Exclude current event from results?",
+     *      type="integer",
+     *      required=false
+     *   ),
+     *  @SWG\Parameter(
+     *      name="excludeAllDay",
+     *      in="formData",
+     *      description="A flag (0, 1), Exclude all day events from results?",
+     *      type="integer",
+     *      required=false
+     *   ),
+     *  @SWG\Parameter(
+     *      name="updateInterval",
+     *      in="formData",
+     *      description="Update interval in minutes",
+     *      type="integer",
+     *      required=false
+     *   ),
+     *  @SWG\Parameter(
+     *      name="template",
+     *      in="formData",
+     *      description="Template to use",
+     *      type="string",
+     *      required=false
+     *   ),
+     *  @SWG\Parameter(
+     *      name="template_advanced",
+     *      in="formData",
+     *      description="A flag (0, 1), Should text area by presented as a visual editor?",
+     *      type="integer",
+     *      required=false
+     *   ),
+     *  @SWG\Parameter(
+     *      name="currentEventTemplate",
+     *      in="formData",
+     *      description="Template to use for current Event",
+     *      type="string",
+     *      required=false
+     *   ),
+     *  @SWG\Parameter(
+     *      name="currentEventTemplate_advanced",
+     *      in="formData",
+     *      description="A flag (0, 1), Should text area by presented as a visual editor?",
+     *      type="integer",
+     *      required=false
+     *   ),
+     *  @SWG\Parameter(
+     *      name="noDataMessage",
+     *      in="formData",
+     *      description="Message to show when no notifications are available",
+     *      type="string",
+     *      required=false
+     *   ),
+     *  @SWG\Parameter(
+     *      name="noDataMessage_advanced",
+     *      in="formData",
+     *      description="A flag (0, 1), Should text area by presented as a visual editor?",
+     *      type="integer",
+     *      required=false
+     *   ),
+     *  @SWG\Parameter(
+     *      name="styleSheet",
+     *      in="formData",
+     *      description="Optional StyleSheet",
+     *      type="string",
+     *      required=false
+     *   ),
+     *  @SWG\Parameter(
+     *      name="useEventTimezone",
+     *      in="formData",
+     *      description="A flag (0,1), Should we use Event Timezone?",
+     *      type="integer",
+     *      required=false
+     *   ),
+     *          *  @SWG\Parameter(
+     *      name="useCalendarTimezone",
+     *      in="formData",
+     *      description="A flag (0,1), Should we use Calendar Timezone?",
+     *      type="integer",
+     *      required=false
+     *   ),
+     *          *  @SWG\Parameter(
+     *      name="windowsFormatCalendar",
+     *      in="formData",
+     *      description="Does the calendar feed come from Windows - if unsure leave unselected.",
+     *      type="integer",
+     *      required=false
+     *   ),
+     *  @SWG\Response(
+     *      response=204,
+     *      description="successful operation"
+     *  )
+     * )
+     *
+     * @inheritdoc
+     */
     public function edit()
     {
         $this->setDuration($this->getSanitizer()->getInt('duration', $this->getDuration()));
@@ -117,48 +310,28 @@ class Calendar extends ModuleWidget
         $this->setOption('itemsSideBySide', $this->getSanitizer()->getCheckbox('itemsSideBySide'));
         $this->setOption('useCurrentTemplate', $this->getSanitizer()->getCheckbox('useCurrentTemplate'));
 
+        $this->setOption('excludeCurrent', $this->getSanitizer()->getCheckbox('excludeCurrent'));
         $this->setOption('excludeAllDay', $this->getSanitizer()->getCheckbox('excludeAllDay'));
         $this->setOption('updateInterval', $this->getSanitizer()->getInt('updateInterval', 120));
 
-        $this->setRawNode('template', $this->getSanitizer()->getParam('ta_text', null));
+        $this->setRawNode('template', $this->getSanitizer()->getParam('template', null));
+        $this->setOption('template_advanced', $this->getSanitizer()->getCheckbox('template_advanced'));
+
         $this->setRawNode('currentEventTemplate', $this->getSanitizer()->getParam('currentEventTemplate', null));
+        $this->setOption('currentEventTemplate_advanced', $this->getSanitizer()->getCheckbox('currentEventTemplate_advanced'));
+
         $this->setRawNode('noDataMessage', $this->getSanitizer()->getParam('noDataMessage', $this->getSanitizer()->getParam('noDataMessage', null)));
+        $this->setOption('noDataMessage_advanced', $this->getSanitizer()->getCheckbox('noDataMessage_advanced'));
+
         $this->setRawNode('styleSheet', $this->getSanitizer()->getParam('styleSheet', $this->getSanitizer()->getParam('styleSheet', null)));
 
-        $this->validate();
+        $this->setOption('useEventTimezone', $this->getSanitizer()->getCheckbox('useEventTimezone'));
+        $this->setOption('useCalendarTimezone', $this->getSanitizer()->getCheckbox('useCalendarTimezone'));
+        $this->setOption('windowsFormatCalendar', $this->getSanitizer()->getCheckbox('windowsFormatCalendar'));
+        $this->setOption('enableStat', $this->getSanitizer()->getString('enableStat'));
+
+        $this->isValid();
         $this->saveWidget();
-    }
-
-    /**
-     * Validate this modules config against a minimum set of requirements
-     * @throws InvalidArgumentException
-     */
-    private function validate()
-    {
-        // Must have a duration
-        if ($this->getUseDuration() == 1 && $this->getDuration() == 0)
-            throw new InvalidArgumentException(__('Please enter a duration'), 'duration');
-
-        // Validate the URL
-        if (!v::url()->notEmpty()->validate(urldecode($this->getOption('uri'))))
-            throw new InvalidArgumentException(__('Please enter a feed URI containing the events you want to display'), 'uri');
-
-        if ($this->getWidgetId() != '') {
-            $customInterval = $this->getOption('customInterval');
-
-            if ($customInterval != '') {
-                // Try to create a date interval from it
-                $dateInterval = \DateInterval::createFromDateString($customInterval);
-
-                // Use now and add the date interval to it
-                $now = Date::now();
-                $check = $now->copy()->add($dateInterval);
-
-                if ($now->equalTo($check))
-                    throw new InvalidArgumentException(__('That is not a valid date interval, please use natural language such as 1 week'), 'customInterval');
-
-            }
-        }
     }
 
     /** @inheritdoc */
@@ -190,7 +363,7 @@ class Calendar extends ModuleWidget
             if ($noDataMessage != '') {
                 $items[] = [
                     'startDate' => 0,
-                    'endDate' => Date::now()->addYear()->format('U'),
+                    'endDate' => Date::now()->addYear()->format('c'),
                     'item' => $noDataMessage,
                     'currentEventItem' => $noDataMessage
                 ];
@@ -248,9 +421,6 @@ class Calendar extends ModuleWidget
             ->appendOptions([
                 'originalWidth' => $this->region->width,
                 'originalHeight' => $this->region->height,
-                'previewWidth' => $this->getSanitizer()->getDouble('width', 0),
-                'previewHeight' => $this->getSanitizer()->getDouble('height', 0),
-                'scaleOverride' => $this->getSanitizer()->getDouble('scale_override', 0),
                 'fx' => $effect,
                 'duration' => $duration,
                 'durationIsPerItem' => (($durationIsPerItem == 0) ? false : true),
@@ -260,18 +430,21 @@ class Calendar extends ModuleWidget
             ])
             ->appendJavaScript('
                 $(document).ready(function() {
-                
+                    var excludeCurrent = ' . ($this->getOption('excludeCurrent', 0) == 0 ? 'false' : 'true') . ';
                     var parsedItems = [];
                     var now = moment();
                 
                     // Prepare the items array, sorting it and removing any items that have expired.
                     $.each(items, function(index, element) {
                         // Parse the item and add it to the array if it has not finished yet
-                        var endDate = moment(element.endDate, "X");
+                        var endDate = moment(element.endDate);
                         
                         if (endDate.isAfter(now)) {
-                            if (moment(element.startDate, "X").isBefore(now)) {
-                                parsedItems.push(element.currentEventItem);
+                            if (moment(element.startDate).isBefore(now)) {
+                                // This is a currently active event - do we want to add or exclude these?
+                                if (!excludeCurrent) {
+                                    parsedItems.push(element.currentEventItem);
+                                }
                             } else {
                                 parsedItems.push(element.item);
                             }
@@ -367,7 +540,9 @@ class Calendar extends ModuleWidget
         $items = [];
 
         // Create an ICal helper and pass it the contents of the file.
-        $iCal = new ICal();
+        $iCal = new ICal(false, [
+            'replaceWindowsTimeZoneIds' => ($this->getSetting('replaceWindowsTimeZoneIds', 0) == 1)
+        ]);
 
         try {
             $iCal->initString($feed);
@@ -375,6 +550,11 @@ class Calendar extends ModuleWidget
             $this->getLog()->debug($exception->getMessage() . $exception->getTraceAsString());
 
             throw new ConfigurationException(__('The iCal provided is not valid, please choose a valid feed'));
+        }
+
+        // Before we parse anything - should we use the calendar timezone as a base for our calculations?
+        if ($this->getSetting('useCalendarTimezone') == 1) {
+            $iCal->defaultTimeZone = $iCal->calendarTimeZone();
         }
 
         // We've got something at least, so prepare the template
@@ -387,9 +567,8 @@ class Calendar extends ModuleWidget
         }
 
         // Get a date format
-        $dateFormat = $this->getOption('dateFormat', $this->getConfig()->GetSetting('DATE_FORMAT'));
-        $iCal->defaultTimeZone = $iCal->calendarTimeZone();
-        
+        $dateFormat = $this->getOption('dateFormat', $this->getConfig()->getSetting('DATE_FORMAT'));
+
         // Decide on the Range we're interested in
         // $iCal->eventsFromInterval only works for future events
         $excludeAllDay = $this->getOption('excludeAllDay', 0) == 1;
@@ -400,30 +579,41 @@ class Calendar extends ModuleWidget
         $this->getLog()->debug('Start of day is ' . $startOfDay->toDateTimeString());
         $this->getLog()->debug('End of day is ' . $endOfDay->toDateTimeString());
 
+        // Force timezone of each event?
+        $useEventTimezone = $this->getSetting('useEventTimezone', 1);
+
         // Go through each event returned
         foreach ($iCal->eventsFromInterval($this->getOption('customInterval', '1 week')) as $event) {
-            /** @var \ICal\Event $event */
-            $startDt = Date::createFromFormat('U', $iCal->iCalDateToUnixTimestamp($event->dtstart));
-            $endDt = Date::createFromFormat('U', $iCal->iCalDateToUnixTimestamp($event->dtend));
+            try {
+                /** @var \ICal\Event $event */
+                $startDt = Date::instance($iCal->iCalDateToDateTime($event->dtstart, $useEventTimezone));
+                $endDt = Date::instance($iCal->iCalDateToDateTime($event->dtend, $useEventTimezone));
 
-            if ($excludeAllDay && $startDt->equalTo($startOfDay) && $endDt->equalTo($endOfDay))
-                continue;
+                $this->getLog()->debug('Event with ' . $startDt->format('c') . ' / ' . $endDt->format('c') . '. diff in days = ' . $endDt->diff($startDt)->days);
 
-            // Substitute for all matches in the template
-            $rowString = $this->substituteForEvent($matches, $template, $iCal, $dateFormat, $event);
+                if ($excludeAllDay && ($endDt->diff($startDt)->days >= 1)) {
+                    continue;
+                }
 
-            if ($currentEventTemplate != '') {
-                $currentEventRow = $this->substituteForEvent($currentEventMatches, $currentEventTemplate, $iCal, $dateFormat, $event);
-            } else {
-                $currentEventRow = $rowString;
+                // Substitute for all matches in the template
+                $rowString = $this->substituteForEvent($matches, $template, $startDt, $endDt, $dateFormat, $event);
+
+                if ($currentEventTemplate != '') {
+                    $currentEventRow = $this->substituteForEvent($currentEventMatches, $currentEventTemplate, $startDt,
+                        $endDt, $dateFormat, $event);
+                } else {
+                    $currentEventRow = $rowString;
+                }
+
+                $items[] = [
+                    'startDate' => $startDt->format('c'),
+                    'endDate' => $endDt->format('c'),
+                    'item' => $rowString,
+                    'currentEventItem' => $currentEventRow
+                ];
+            } catch (\Exception $exception) {
+                $this->getLog()->error('Unable to parse event. ' . var_export($event, true));
             }
-
-            $items[] = [
-                'startDate' => $iCal->iCalDateToUnixTimestamp($event->dtstart),
-                'endDate' => $iCal->iCalDateToUnixTimestamp($event->dtend),
-                'item' => $rowString,
-                'currentEventItem' => $currentEventRow
-            ];
         }
 
         return $items;
@@ -432,12 +622,13 @@ class Calendar extends ModuleWidget
     /**
      * @param $matches
      * @param $string
-     * @param ICal $iCal
+     * @param Date $startDt
+     * @param Date $endDt
      * @param $dateFormat
      * @param $event
      * @return mixed
      */
-    private function substituteForEvent($matches, $string, $iCal, $dateFormat, $event)
+    private function substituteForEvent($matches, $string, $startDt, $endDt, $dateFormat, $event)
     {
         // Run through all [] substitutes in $matches
         foreach ($matches[0] as $sub) {
@@ -462,12 +653,23 @@ class Calendar extends ModuleWidget
                     break;
 
                 case '[StartDate]':
-                    $replace = $iCal->iCalDateToDateTime($event->dtstart, true)->format($dateFormat);
+                    $replace = $startDt->format($dateFormat);
                     break;
 
                 case '[EndDate]':
-                    $replace = $iCal->iCalDateToDateTime($event->dtend, true)->format($dateFormat);
+                    $replace = $endDt->format($dateFormat);
                     break;
+            }
+
+            // custom date formats
+            if (strpos($sub, '[StartDate|') !== false) {
+                $format = str_replace('[', '', str_replace(']', '', str_replace('[StartDate|', '[', $sub)));
+                $replace = $startDt->format($format);
+            }
+
+            if (strpos($sub, '[EndDate|') !== false) {
+                $format = str_replace('[', '', str_replace(']', '', str_replace('[EndDate|', '[', $sub)));
+                $replace = $endDt->format($format);
             }
 
             // Substitute the replacement we have found (it might be '')
@@ -480,7 +682,32 @@ class Calendar extends ModuleWidget
     /** @inheritdoc */
     public function isValid()
     {
-        return 1;
+        // Must have a duration
+        if ($this->getUseDuration() == 1 && $this->getDuration() == 0)
+            throw new InvalidArgumentException(__('Please enter a duration'), 'duration');
+
+        // Validate the URL
+        if (!v::url()->notEmpty()->validate(urldecode($this->getOption('uri'))))
+            throw new InvalidArgumentException(__('Please enter a feed URI containing the events you want to display'), 'uri');
+
+        if ($this->getWidgetId() != '') {
+            $customInterval = $this->getOption('customInterval');
+
+            if ($customInterval != '') {
+                // Try to create a date interval from it
+                $dateInterval = \DateInterval::createFromDateString($customInterval);
+
+                // Use now and add the date interval to it
+                $now = Date::now();
+                $check = $now->copy()->add($dateInterval);
+
+                if ($now->equalTo($check))
+                    throw new InvalidArgumentException(__('That is not a valid date interval, please use natural language such as 1 week'), 'customInterval');
+
+            }
+        }
+
+        return self::$STATUS_VALID;
     }
 
     /** @inheritdoc */

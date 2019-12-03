@@ -50,7 +50,7 @@
                                 <th>{% trans "Description" %}</th>
                                 <th>{% trans "Start Time" %}</th>
                                 <th>{% trans "End Time" %}</th>
-                                <th></th>
+                                <th>{% trans "Row Menu" %}</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -65,17 +65,11 @@
 
 {% block javaScript %}
     <script type="text/javascript">
-        Handlebars.registerHelper('if_eq', function(a, b, opts) {
-            if(a == b) // Or === depending on your needs
-                return opts.fn(this);
-            else
-                return opts.inverse(this);
-        });
 
         var table = $("#dayparts").DataTable({ "language": dataTablesLanguage,
             serverSide: true, stateSave: true, stateDuration: 0,
             stateLoadCallback: function (settings, callback) {
-                var data;
+                var data = {};
                 $.ajax({
                     type: "GET",
                     async: false,
@@ -128,6 +122,7 @@
 
         table.on('draw', dataTableDraw);
         table.on('processing.dt', dataTableProcessing);
+        dataTableAddButtons(table, $('#dayparts_wrapper').find('.col-sm-6').eq(1));
 
         function dayPartFormOpen(dialog) {
             // Render a set of exceptions
@@ -207,6 +202,15 @@
                 }
             });
         }
+
+        // Equals helper for the templates below
+        Handlebars.registerHelper('eq', function(v1, v2, opts) {
+            if (v1 === v2) {
+                return opts.fn(this);
+            } else {
+                return opts.inverse(this);
+            }
+        });
     </script>
     {% raw %}
     <script type="text/x-handlebars-template" id="dayPartExceptionsTemplate">
@@ -215,7 +219,7 @@
                 <select class="form-control" name="exceptionDays[]">
                     <option value=""></option>
                     {{#each daysOfWeek}}
-                    <option value="{{ day }}" {{#if_eq day ../exceptionDay}}selected{{/if_eq}}>{{ title }}</option>
+                    <option value="{{ day }}" {{#eq day ../exceptionDay}}selected{{/eq}}>{{ title }}</option>
                     {{/each}}
                 </select>
             </div>

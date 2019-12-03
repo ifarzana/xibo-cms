@@ -28,7 +28,6 @@ use Xibo\Factory\LayoutFactory;
 use Xibo\Factory\MediaFactory;
 use Xibo\Factory\NotificationFactory;
 use Xibo\Factory\TaskFactory;
-use Xibo\Factory\UpgradeFactory;
 use Xibo\Factory\UserFactory;
 use Xibo\Factory\UserGroupFactory;
 use Xibo\Factory\UserNotificationFactory;
@@ -37,7 +36,7 @@ use Xibo\Service\DateServiceInterface;
 use Xibo\Service\LogServiceInterface;
 use Xibo\Service\SanitizerServiceInterface;
 use Xibo\Storage\StorageServiceInterface;
-use Xibo\XTR\MaintenanceDailyTask;
+use Xibo\Storage\TimeSeriesStoreInterface;
 use Xibo\XTR\TaskInterface;
 
 /**
@@ -51,6 +50,9 @@ class Task extends Base
 
     /** @var  StorageServiceInterface */
     private $store;
+
+    /** @var  TimeSeriesStoreInterface */
+    private $timeSeriesStore;
 
     /** @var  PoolInterface */
     private $pool;
@@ -66,9 +68,6 @@ class Task extends Base
 
     /** @var  DisplayFactory */
     private $displayFactory;
-
-    /** @var  UpgradeFactory */
-    private $upgradeFactory;
 
     /** @var  MediaFactory */
     private $mediaFactory;
@@ -89,28 +88,28 @@ class Task extends Base
      * @param DateServiceInterface $date
      * @param ConfigServiceInterface $config
      * @param StorageServiceInterface $store
+     * @param TimeSeriesStoreInterface $timeSeriesStore
      * @param PoolInterface $pool
      * @param TaskFactory $taskFactory
      * @param UserFactory $userFactory
      * @param UserGroupFactory $userGroupFactory
      * @param LayoutFactory $layoutFactory
      * @param DisplayFactory $displayFactory
-     * @param UpgradeFactory $upgradeFactory
      * @param MediaFactory $mediaFactory
      * @param NotificationFactory $notificationFactory
      * @param UserNotificationFactory $userNotificationFactory
      */
-    public function __construct($log, $sanitizerService, $state, $user, $help, $date, $config, $store, $pool, $taskFactory, $userFactory, $userGroupFactory, $layoutFactory, $displayFactory, $upgradeFactory, $mediaFactory, $notificationFactory, $userNotificationFactory)
+    public function __construct($log, $sanitizerService, $state, $user, $help, $date, $config, $store, $timeSeriesStore, $pool, $taskFactory, $userFactory, $userGroupFactory, $layoutFactory, $displayFactory, $mediaFactory, $notificationFactory, $userNotificationFactory)
     {
         $this->setCommonDependencies($log, $sanitizerService, $state, $user, $help, $date, $config);
         $this->taskFactory = $taskFactory;
         $this->store = $store;
+        $this->timeSeriesStore = $timeSeriesStore;
         $this->userGroupFactory = $userGroupFactory;
         $this->pool = $pool;
         $this->userFactory = $userFactory;
         $this->layoutFactory = $layoutFactory;
         $this->displayFactory = $displayFactory;
-        $this->upgradeFactory = $upgradeFactory;
         $this->mediaFactory = $mediaFactory;
         $this->notificationFactory = $notificationFactory;
         $this->userNotificationFactory = $userNotificationFactory;
@@ -148,7 +147,7 @@ class Task extends Base
             );
 
             // Don't show any edit buttons if the config is locked.
-            if ($this->getConfig()->GetSetting('TASK_CONFIG_LOCKED_CHECKB') == 'Checked')
+            if ($this->getConfig()->getSetting('TASK_CONFIG_LOCKED_CHECKB') == 1 || $this->getConfig()->getSetting('TASK_CONFIG_LOCKED_CHECKB') == 'Checked')
                 continue;
 
             // Edit Button
@@ -180,7 +179,7 @@ class Task extends Base
         $data = ['tasksAvailable' => []];
 
         // Do we have any modules to install?!
-        if ($this->getConfig()->GetSetting('TASK_CONFIG_LOCKED_CHECKB') != 'Checked') {
+        if ($this->getConfig()->getSetting('TASK_CONFIG_LOCKED_CHECKB') != 1 && $this->getConfig()->getSetting('TASK_CONFIG_LOCKED_CHECKB') != 'Checked') {
             // Get a list of matching files in the modules folder
             $files = array_merge(glob(PROJECT_ROOT . '/tasks/*.task'), glob(PROJECT_ROOT . '/custom/*.task'));
 
@@ -336,47 +335,17 @@ class Task extends Base
      */
     public function run($taskId)
     {
-        // Handle cases where we arrive from older versions of the application.
-        // that is versions without tasks
-        if (DBVERSION < 128) {
-            // We need to manually create and run task 1 so that we trigger an upgrade.
-            $task = new MaintenanceDailyTask();
-            $task->setApp($this->getApp())
-                ->setSanitizer($this->getSanitizer())
-                ->setUser($this->getUser())
-                ->setConfig($this->getConfig())
-                ->setLogger($this->getLog())
-                ->setDate($this->getDate())
-                ->setPool($this->pool)
-                ->setStore($this->store)
-                ->setFactories(
-                    $this->userFactory,
-                    $this->userGroupFactory,
-                    $this->layoutFactory,
-                    $this->displayFactory,
-                    $this->upgradeFactory,
-                    $this->mediaFactory,
-                    $this->notificationFactory,
-                    $this->userNotificationFactory
-                )
-                ->setTask($task)
-                ->run();
-
-            if ($taskId == 1)
-                return;
-        }
-
         // Get this task
         $task = $this->taskFactory->getById($taskId);
 
         // Set to running
-        $this->getLog()->debug('Running Task ' . $task->name . ' [' . $task->taskId . ']');
+        $this->getLog()->debug('Running Task ' . $task->name . ' [' . $task->taskId . '], Class = ' . $task->class);
 
         // Run
         try {
             // Instantiate
             if (!class_exists($task->class))
-                throw new NotFoundException();
+                throw new NotFoundException('Task with class name ' . $task->class . ' not found');
 
             /** @var TaskInterface $taskClass */
             $taskClass = new $task->class();
@@ -385,7 +354,6 @@ class Task extends Base
             $start = time();
 
             $taskClass
-                ->setApp($this->getApp())
                 ->setSanitizer($this->getSanitizer())
                 ->setUser($this->getUser())
                 ->setConfig($this->getConfig())
@@ -393,16 +361,8 @@ class Task extends Base
                 ->setDate($this->getDate())
                 ->setPool($this->pool)
                 ->setStore($this->store)
-                ->setFactories(
-                    $this->userFactory,
-                    $this->userGroupFactory,
-                    $this->layoutFactory,
-                    $this->displayFactory,
-                    $this->upgradeFactory,
-                    $this->mediaFactory,
-                    $this->notificationFactory,
-                    $this->userNotificationFactory
-                )
+                ->setTimeSeriesStore($this->timeSeriesStore)
+                ->setFactories($this->getApp()->container)
                 ->setTask($task)
                 ->run();
 
@@ -451,6 +411,10 @@ class Task extends Base
         // Process timeouts
         $this->pollProcessTimeouts();
 
+        // Keep track of tasks we've run during this poll period
+        // we will use this as a catch all so that we do not run a task more than once.
+        $tasksRun = [];
+
         // The getting/updating of tasks runs in a separate DB connection
         $sqlForActiveTasks = 'SELECT taskId, `schedule`, runNow, lastRunDt FROM `task` WHERE isActive = 1 AND `status` <> :status ORDER BY lastRunDuration';
 
@@ -469,28 +433,27 @@ class Task extends Base
             foreach ($tasks as $task) {
                 /** @var \Xibo\Entity\Task $task */
                 $taskId = $task['taskId'];
+
+                // Skip tasks that have already been run
+                if (in_array($taskId, $tasksRun)) {
+                    continue;
+                }
+
                 $cron = \Cron\CronExpression::factory($task['schedule']);
 
                 // Is the next run date of this event earlier than now, or is the task set to runNow
                 $nextRunDt = $cron->getNextRunDate(\DateTime::createFromFormat('U', $task['lastRunDt']))->format('U');
 
-                if ($task['runNow'] == 1 || $nextRunDt < time()) {
+                if ($task['runNow'] == 1 || $nextRunDt <= time()) {
 
                     $this->getLog()->info('Running Task ' . $taskId);
 
                     // Set to running
-                    if (DBVERSION < 133) {
-                        $this->store->update($updateSth, [
-                            'taskId' => $taskId,
-                            'status' => \Xibo\Entity\Task::$STATUS_RUNNING
-                        ], 'xtr');
-                    } else {
-                        $this->store->update('UPDATE `task` SET status = :status, lastRunStartDt = :lastRunStartDt WHERE taskId = :taskId', [
-                            'taskId' => $taskId,
-                            'status' => \Xibo\Entity\Task::$STATUS_RUNNING,
-                            'lastRunStartDt' => $this->getDate()->getLocalDate(null, 'U')
-                        ], 'xtr');
-                    }
+                    $this->store->update('UPDATE `task` SET status = :status, lastRunStartDt = :lastRunStartDt WHERE taskId = :taskId', [
+                        'taskId' => $taskId,
+                        'status' => \Xibo\Entity\Task::$STATUS_RUNNING,
+                        'lastRunStartDt' => $this->getDate()->getLocalDate(null, 'U')
+                    ], 'xtr');
                     $this->store->commitIfNecessary('xtr');
 
                     // Pass to run.
@@ -521,6 +484,10 @@ class Task extends Base
 
                     // We have run a task
                     $taskRun = true;
+
+                    // We've run this task during this polling period
+                    $tasksRun[] = $taskId;
+
                     break;
                 }
             }
@@ -536,10 +503,6 @@ class Task extends Base
     private function pollProcessTimeouts()
     {
         $db = $this->store->getConnection('xtr');
-
-        // Not available before 133 (1.8.2)
-        if (DBVERSION < 133)
-            return;
 
         // Get timed out tasks and deal with them
         $command = $db->prepare('

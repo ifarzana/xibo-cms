@@ -29,8 +29,12 @@
             {% endif %}
         {% endif %}
 
-        {% if currentUser.routeViewable("/library") or currentUser.routeViewable("/dataset") %}
+        {% if currentUser.routeViewable("/library") or currentUser.routeViewable("/playlist")  or currentUser.routeViewable("/dataset") %}
             <li class="sidebar-title"><a>{% trans "Library" %}</a></li>
+            {% if currentUser.routeViewable("/playlist") %}
+                <li class="sidebar-list"><a href="{{ urlFor("playlist.view") }}">{% trans "Playlists" %}</a></li>
+            {% endif %}
+
             {% if currentUser.routeViewable("/library") %}
                 <li class="sidebar-list"><a href="{{ urlFor("library.view") }}">{% trans "Media" %}</a></li>
             {% endif %}
@@ -52,6 +56,10 @@
 
             {% if currentUser.routeViewable("/displayprofile") %}
                 <li class="sidebar-list"><a href="{{ urlFor("displayprofile.view") }}">{% trans "Display Settings" %}</a></li>
+            {% endif %}
+
+            {% if currentUser.routeViewable("/playersoftware") %}
+                <li class="sidebar-list"><a href="{{ urlFor("playersoftware.view") }}">{% trans "Player Versions" %}</a></li>
             {% endif %}
 
             {% if currentUser.routeViewable("/command") %}
@@ -95,6 +103,10 @@
             {% if currentUser.routeViewable("/task") %}
                 <li class="sidebar-list"><a href="{{ urlFor("task.view") }}">{% trans "Tasks" %}</a></li>
             {% endif %}
+
+            {% if currentUser.isSuperAdmin() %}
+                <li class="sidebar-list"><a href="{{ urlFor("tag.view") }}">{% trans "Tags" %}</a></li>
+            {% endif %}
         {% endif %}
 
 
@@ -112,6 +124,17 @@
 
             {% if currentUser.routeViewable("/stats") %}
                 <li class="sidebar-list"><a href="{{ urlFor("stats.library.view") }}">{% trans "Library Usage" %}</a></li>
+            {% endif %}
+        {% endif %}
+
+
+        {% if currentUser.routeViewable("/report") %}
+            {% if currentUser.routeViewable("/report") %}
+                <li class="sidebar-list"><a href="{{ urlFor("reportschedule.view") }}">{% trans "Report Schedules" %}</a></li>
+            {% endif %}
+
+            {% if currentUser.routeViewable("/report") %}
+                <li class="sidebar-list"><a href="{{ urlFor("savedreport.view") }}">{% trans "Saved Reports" %}</a></li>
             {% endif %}
         {% endif %}
 

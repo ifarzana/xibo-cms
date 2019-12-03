@@ -32,7 +32,7 @@ class XiboUploadHandler extends BlueImpUploadHandler
         // Handle form data, e.g. $_REQUEST['description'][$index]
         // Link the file to the module
         $fileName = $file->name;
-        $filePath = $controller->getConfig()->GetSetting('LIBRARY_LOCATION') . 'temp/' . $fileName;
+        $filePath = $controller->getConfig()->getSetting('LIBRARY_LOCATION') . 'temp/' . $fileName;
 
         $controller->getLog()->debug('Upload complete for name: ' . $fileName . '. Index is %s.', $index);
 
@@ -44,26 +44,41 @@ class XiboUploadHandler extends BlueImpUploadHandler
                 throw new LibraryFullException(sprintf(__('Your library is full. Library Limit: %s K'), $this->options['libraryLimit']));
 
             // Check for a user quota
-            $controller->getUser()->isQuotaFullByUser();
+            // this method has the ability to reconnect to MySQL in the event that the upload has taken a long time.
+            // OSX-381
+            $controller->getUser()->isQuotaFullByUser(true);
 
             // Get some parameters
             if ($index === null) {
-                if (isset($_REQUEST['name']))
+                if (isset($_REQUEST['name'])) {
                     $name = $_REQUEST['name'];
-                else 
+                } else {
                     $name = $fileName;
                 }
-            else {
-                if (isset($_REQUEST['name'][$index]))
+
+                if (isset($_REQUEST['tags'])) {
+                    $tags = $_REQUEST['tags'];
+                } else {
+                    $tags = '';
+                }
+            } else {
+                if (isset($_REQUEST['name'][$index])) {
                     $name = $_REQUEST['name'][$index];
-                else 
+                } else {
                     $name = $fileName;
                 }
+
+                if (isset($_REQUEST['tags'][$index])) {
+                    $tags = $_REQUEST['tags'][$index];
+                } else {
+                    $tags = '';
+                }
+            }
             // Guess the type
             $module = $controller->getModuleFactory()->getByExtension(strtolower(substr(strrchr($fileName, '.'), 1)));
             $module = $controller->getModuleFactory()->create($module->type);
 
-            $controller->getLog()->debug('Module Type = %s, Name = ', $module->getModuleType(), $module->getModuleName());
+            $controller->getLog()->debug('Module Type = %s, Name = %s', $module->getModuleType(), $module->getModuleName());
 
             // Do we need to run any pre-processing on the file?
             $module->preProcessFile($filePath);
@@ -89,10 +104,13 @@ class XiboUploadHandler extends BlueImpUploadHandler
 
                 // Set the old record to edited
                 $oldMedia->isEdited = 1;
+
                 $oldMedia->save(['validate' => false]);
 
                 // The media name might be empty here, because the user isn't forced to select it
                 $name = ($name == '') ? $oldMedia->name : $name;
+                $tags = ($tags == '') ? '' : $tags;
+
 
                 // Add the Media
                 //  the userId is either the existing user (if we are changing media type) or the currently logged in user otherwise.
@@ -103,14 +121,24 @@ class XiboUploadHandler extends BlueImpUploadHandler
                     (($this->options['allowMediaTypeChange'] == 1) ? $oldMedia->getOwnerId() : $this->options['userId'])
                 );
 
+                if ($tags != '') {
+                    $concatTags = (string)$oldMedia->tags . ',' . $tags;
+                    $media->replaceTags($controller->getTagFactory()->tagsFromString($concatTags));
+                }
+
                 // Set the duration
-                $media->duration = $module->determineDuration($filePath);
+                if ($oldMedia->mediaType != 'video' && $media->mediaType != 'video')
+                    $media->duration = $oldMedia->duration;
+                else
+                    $media->duration = $module->determineDuration($filePath);
 
                 // Pre-process
                 $module->preProcess($media, $filePath);
 
                 // Raise an event for this media item
                 $controller->getDispatcher()->dispatch(LibraryReplaceEvent::$NAME, new LibraryReplaceEvent($module, $media, $oldMedia));
+
+                $media->enableStat = $oldMedia->enableStat;
 
                 // Save
                 $media->save(['oldMedia' => $oldMedia]);
@@ -165,11 +193,15 @@ class XiboUploadHandler extends BlueImpUploadHandler
                             $widget->unassignMedia($oldMedia->mediaId);
                             $widget->assignMedia($media->mediaId);
 
+                            // calculate duration
+                            $module->setWidget($widget);
+                            $widget->calculateDuration($module);
+
                             // Raise an event for this media item
                             $controller->getDispatcher()->dispatch(LibraryReplaceWidgetEvent::$NAME, new LibraryReplaceWidgetEvent($module, $widget, $media, $oldMedia));
 
                             // Save
-                            $widget->save();
+                            $widget->save(['alwaysUpdate' => true]);
                         }
                     }
 
@@ -229,7 +261,7 @@ class XiboUploadHandler extends BlueImpUploadHandler
                         $controller->getLog()->debug('No prior media found');
                     }
 
-                    $oldMedia->setChildObjectDependencies($controller->getLayoutFactory(), $controller->getWidgetFactory(), $controller->getDisplayGroupFactory(), $controller->getDisplayFactory(), $controller->getScheduleFactory());
+                    $oldMedia->setChildObjectDependencies($controller->getLayoutFactory(), $controller->getWidgetFactory(), $controller->getDisplayGroupFactory(), $controller->getDisplayFactory(), $controller->getScheduleFactory(), $controller->getPlayerVersionFactory());
                     $oldMedia->delete();
 
                 } else {
@@ -241,15 +273,22 @@ class XiboUploadHandler extends BlueImpUploadHandler
 
                 // The media name might be empty here, because the user isn't forced to select it
                 $name = ($name == '') ? $fileName : $name;
+                $tags = ($tags == '') ? '' : $tags;
 
                 // Add the Media
                 $media = $controller->getMediaFactory()->create($name, $fileName, $module->getModuleType(), $this->options['userId']);
-
+                if ($tags != '') {
+                    $media->replaceTags($controller->getTagFactory()->tagsFromString($tags));
+                }
                 // Set the duration
                 $media->duration = $module->determineDuration($filePath);
 
                 // Pre-process
                 $module->preProcess($media, $filePath);
+
+                if ($media->enableStat == null) {
+                    $media->enableStat = $controller->getConfig()->getSetting('MEDIA_STATS_ENABLED_DEFAULT');
+                }
 
                 // Save
                 $media->save();
@@ -258,7 +297,7 @@ class XiboUploadHandler extends BlueImpUploadHandler
                 $module->postProcess($media);
 
                 // Permissions
-                foreach ($controller->getPermissionFactory()->createForNewEntity($controller->getUser(), get_class($media), $media->getId(), $controller->getConfig()->GetSetting('MEDIA_DEFAULT'), $controller->getUserGroupFactory()) as $permission) {
+                foreach ($controller->getPermissionFactory()->createForNewEntity($controller->getUser(), get_class($media), $media->getId(), $controller->getConfig()->getSetting('MEDIA_DEFAULT'), $controller->getUserGroupFactory()) as $permission) {
                     /* @var Permission $permission */
                     $permission->save();
                 }
@@ -272,6 +311,8 @@ class XiboUploadHandler extends BlueImpUploadHandler
             $file->retired = $media->retired;
             $file->fileSize = $media->fileSize;
             $file->md5 = $media->md5;
+            $file->enableStat = $media->enableStat;
+            $file->mediaType = $module->getModuleType();
 
             // Test to ensure the final file size is the same as the file size we're expecting
             if ($file->fileSize != $file->size)
@@ -289,7 +330,6 @@ class XiboUploadHandler extends BlueImpUploadHandler
 
                 // Get the Playlist
                 $playlist = $controller->getPlaylistFactory()->getById($this->options['playlistId']);
-                $playlist->setChildObjectDependencies($controller->getRegionFactory());
 
                 // Create a Widget and add it to our region
                 $widget = $controller->getWidgetFactory()->create($this->options['userId'], $playlist->playlistId, $module->getModuleType(), $media->duration);
@@ -299,9 +339,10 @@ class XiboUploadHandler extends BlueImpUploadHandler
 
                 // Set default options (this sets options on the widget)
                 $module->setDefaultWidgetOptions();
-
                 // Assign media
                 $widget->assignMedia($media->mediaId);
+                // Calculate the widget duration for new uploaded media widgets
+                $widget->calculateDuration($module);
 
                 // Assign the new widget to the playlist
                 $playlist->assignWidget($widget);
@@ -311,7 +352,7 @@ class XiboUploadHandler extends BlueImpUploadHandler
 
                 // Handle permissions
                 // https://github.com/xibosignage/xibo/issues/1274
-                if ($controller->getConfig()->GetSetting('INHERIT_PARENT_PERMISSIONS') == 1) {
+                if ($controller->getConfig()->getSetting('INHERIT_PARENT_PERMISSIONS') == 1) {
                     // Apply permissions from the Parent
                     foreach ($playlist->permissions as $permission) {
                         /* @var Permission $permission */
@@ -319,7 +360,7 @@ class XiboUploadHandler extends BlueImpUploadHandler
                         $permission->save();
                     }
                 } else {
-                    foreach ($controller->getPermissionFactory()->createForNewEntity($controller->getUser(), get_class($widget), $widget->getId(), $controller->getConfig()->GetSetting('LAYOUT_DEFAULT'), $controller->getUserGroupFactory()) as $permission) {
+                    foreach ($controller->getPermissionFactory()->createForNewEntity($controller->getUser(), get_class($widget), $widget->getId(), $controller->getConfig()->getSetting('LAYOUT_DEFAULT'), $controller->getUserGroupFactory()) as $permission) {
                         /* @var Permission $permission */
                         $permission->save();
                     }

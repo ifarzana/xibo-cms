@@ -36,7 +36,9 @@ use Xibo\Helper\Session;
 use Xibo\Helper\Translate;
 use Xibo\Service\ConfigServiceInterface;
 use Xibo\Service\HelpService;
+use Xibo\Service\ImageProcessingService;
 use Xibo\Service\ModuleService;
+use Xibo\Service\ReportService;
 use Xibo\Service\SanitizeService;
 
 /**
@@ -52,16 +54,13 @@ class State extends Middleware
         // Set state
         State::setState($app);
 
-        // Define versions, etc.
-        $app->configService->Version();
-
         // Attach a hook to log the route
         $this->app->hook('slim.before.dispatch', function() use ($app) {
 
             // Do we need SSL/STS?
             // If we are behind a load balancer we should look at HTTP_X_FORWARDED_PROTO
             // if a whitelist of IP address is provided, we should check it, otherwise trust
-            $whiteListLoadBalancers = $app->configService->GetSetting('WHITELIST_LOAD_BALANCERS');
+            $whiteListLoadBalancers = $app->configService->getSetting('WHITELIST_LOAD_BALANCERS');
             $originIp = isset($_SERVER['REMOTE_ADDR']) ? $_SERVER['REMOTE_ADDR'] : '';
             $forwardedProtoHttps = (
                 strtolower($app->request()->headers('HTTP_X_FORWARDED_PROTO', 'http')) === 'https'
@@ -72,15 +71,15 @@ class State extends Middleware
             );
 
             if ($app->request()->getScheme() == 'https' || $forwardedProtoHttps) {
-                if ($app->configService->GetSetting('ISSUE_STS', 0) == 1)
-                    $app->response()->header('strict-transport-security', 'max-age=' . $app->configService->GetSetting('STS_TTL', 600));
+                if ($app->configService->getSetting('ISSUE_STS', 0) == 1)
+                    $app->response()->header('strict-transport-security', 'max-age=' . $app->configService->getSetting('STS_TTL', 600));
 
             } else {
                 // Get the current route pattern
                 $resource = $app->router->getCurrentRoute()->getPattern();
 
                 // Allow non-https access to the clock page, otherwise force https
-                if ($resource !== '/clock' && $app->configService->GetSetting('FORCE_HTTPS', 0) == 1) {
+                if ($resource !== '/clock' && $app->configService->getSetting('FORCE_HTTPS', 0) == 1) {
                     $redirect = "https://" . $_SERVER['HTTP_HOST'] . $_SERVER['REQUEST_URI'];
                     header("Location: $redirect");
                     $app->halt(302);
@@ -88,11 +87,11 @@ class State extends Middleware
             }
 
             // Check to see if the instance has been suspended, if so call the special route
-            if ($app->configService->GetSetting('INSTANCE_SUSPENDED') == 1)
+            if ($app->configService->getSetting('INSTANCE_SUSPENDED') == 1)
                 throw new InstanceSuspendedException();
 
             // Get to see if upgrade is pending
-            if ($app->configService->isUpgradePending() && $app->getName() != 'web')
+            if (Environment::migrationPending())
                 throw new UpgradePendingException();
 
             // Reset the ETAGs for GZIP
@@ -137,7 +136,7 @@ class State extends Middleware
 
         // Register the date service
         $app->container->singleton('dateService', function() use ($app) {
-            if ($app->configService->GetSetting('CALENDAR_TYPE') == 'Jalali')
+            if ($app->configService->getSetting('CALENDAR_TYPE') == 'Jalali')
                 $date = new \Xibo\Service\DateServiceJalali();
             else
                 $date = new \Xibo\Service\DateServiceGregorian();
@@ -157,6 +156,30 @@ class State extends Middleware
         // Register the event dispatcher
         $app->container->singleton('dispatcher', function($container) {
             return new EventDispatcher();
+        });
+
+        // Register the report service
+        $app->container->singleton('reportService', function($container) use($app){
+            return new ReportService(
+                $app,
+                $container->state,
+                $container->store,
+                $container->timeSeriesStore,
+                $container->logService,
+                $container->configService,
+                $container->dateService,
+                $container->sanitizerService,
+                $container->savedReportFactory
+            );
+        });
+
+        // Register the image processing service
+        $app->container->singleton('imageProcessingService', function($container) {
+            $imageProcessingService = new ImageProcessingService();
+            $imageProcessingService->setDependencies(
+                $container->logService
+            );
+            return $imageProcessingService;
         });
 
         // Register Controllers with DI
@@ -179,7 +202,15 @@ class State extends Middleware
         });
 
         // Set some public routes
-        $app->publicRoutes = array('/login', '/login/forgotten', '/clock', '/about', '/login/ping');
+        $app->publicRoutes = [
+            '/login', '/login/forgotten', '/clock', '/about', '/login/ping',
+            '/rss/:psk',
+            '/sssp_config.xml',
+            '/sssp_dl.wgt',
+            '/playersoftware/:nonce/sssp_dl.wgt',
+            '/playersoftware/:nonce/sssp_config.xml',
+            '/tfa'
+        ];
 
         // The state of the application response
         $app->container->singleton('state', function() { return new ApplicationState(); });
@@ -187,11 +218,8 @@ class State extends Middleware
         // Setup the translations for gettext
         Translate::InitLocale($app->configService);
 
-        // Config Version
-        $app->configService->Version();
-
         // Default timezone
-        date_default_timezone_set($app->configService->GetSetting("defaultTimezone"));
+        date_default_timezone_set($app->configService->getSetting("defaultTimezone"));
 
         // Configure the cache
         self::configureCache($app->container, $app->configService, $app->logWriter->getWriter());
@@ -218,7 +246,7 @@ class State extends Middleware
         $app->container->session->set('init', '1');
 
         // App Mode
-        $mode = $app->configService->GetSetting('SERVER_MODE');
+        $mode = $app->configService->getSetting('SERVER_MODE');
         $app->logService->setMode($mode);
 
         // Configure logging
@@ -230,16 +258,16 @@ class State extends Middleware
         else {
 
             // Log level
-            $level = \Xibo\Service\LogService::resolveLogLevel($app->configService->GetSetting('audit'));
-            $restingLevel = \Xibo\Service\LogService::resolveLogLevel($app->configService->GetSetting('RESTING_LOG_LEVEL'));
+            $level = \Xibo\Service\LogService::resolveLogLevel($app->configService->getSetting('audit'));
+            $restingLevel = \Xibo\Service\LogService::resolveLogLevel($app->configService->getSetting('RESTING_LOG_LEVEL'));
 
             if ($level > $restingLevel) {
                 // Do we allow the log level to be this high
-                $elevateUntil = $app->configService->GetSetting('ELEVATE_LOG_UNTIL');
+                $elevateUntil = $app->configService->getSetting('ELEVATE_LOG_UNTIL');
 
                 if (intval($elevateUntil) < time()) {
-                    // Elevation has expired, revery log level
-                    $app->configService->ChangeSetting('audit', $app->configService->GetSetting('RESTING_LOG_LEVEL'));
+                    // Elevation has expired, revert log level
+                    $app->configService->changeSetting('audit', $app->configService->getSetting('RESTING_LOG_LEVEL'));
 
                     $level = $restingLevel;
                 }
@@ -326,8 +354,8 @@ class State extends Middleware
             $drivers = $configService->getCacheDrivers();
         } else {
             // File System Driver
-            $realPath = realpath($configService->GetSetting('LIBRARY_LOCATION'));
-            $cachePath = ($realPath) ? $realPath . '/cache/' : $configService->GetSetting('LIBRARY_LOCATION') . 'cache/';
+            $realPath = realpath($configService->getSetting('LIBRARY_LOCATION'));
+            $cachePath = ($realPath) ? $realPath . '/cache/' : $configService->getSetting('LIBRARY_LOCATION') . 'cache/';
 
             $drivers[] = new \Stash\Driver\FileSystem(['path' => $cachePath]);
         }
@@ -471,6 +499,23 @@ class State extends Middleware
             );
         });
 
+        $app->container->singleton('\Xibo\Controller\DataSetRss', function($container) {
+            return new \Xibo\Controller\DataSetRss(
+                $container->logService,
+                $container->sanitizerService,
+                $container->state,
+                $container->user,
+                $container->helpService,
+                $container->dateService,
+                $container->configService,
+                $container->dataSetRssFactory,
+                $container->dataSetFactory,
+                $container->dataSetColumnFactory,
+                $container->pool,
+                $container->store
+            );
+        });
+
         $app->container->singleton('\Xibo\Controller\DayPart', function($container) {
             return new \Xibo\Controller\DayPart(
                 $container->logService,
@@ -512,7 +557,9 @@ class State extends Middleware
                 $container->requiredFileFactory,
                 $container->tagFactory,
                 $container->notificationFactory,
-                $container->userGroupFactory
+                $container->userGroupFactory,
+                $container->playerVersionFactory,
+                $container->dayPartFactory
             );
         });
 
@@ -533,7 +580,8 @@ class State extends Middleware
                 $container->mediaFactory,
                 $container->commandFactory,
                 $container->scheduleFactory,
-                $container->tagFactory
+                $container->tagFactory,
+                $container->campaignFactory
             );
         });
 
@@ -548,7 +596,9 @@ class State extends Middleware
                 $container->configService,
                 $container->pool,
                 $container->displayProfileFactory,
-                $container->commandFactory
+                $container->commandFactory,
+                $container->playerVersionFactory,
+                $container->dayPartFactory
             );
         });
 
@@ -625,7 +675,8 @@ class State extends Middleware
                 $container->tagFactory,
                 $container->mediaFactory,
                 $container->dataSetFactory,
-                $container->campaignFactory
+                $container->campaignFactory,
+                $container->displayGroupFactory
             );
         });
 
@@ -655,7 +706,8 @@ class State extends Middleware
                 $container->dataSetFactory,
                 $container->displayFactory,
                 $container->scheduleFactory,
-                $container->dayPartFactory
+                $container->dayPartFactory,
+                $container->playerVersionFactory
             );
         });
 
@@ -686,7 +738,8 @@ class State extends Middleware
                 $container->configService,
                 $container->session,
                 $container->userFactory,
-                $container->pool
+                $container->pool,
+                $container->store
             );
         });
 
@@ -706,7 +759,8 @@ class State extends Middleware
                 $container->widgetFactory,
                 $container->displayGroupFactory,
                 $container->displayFactory,
-                $container->scheduleFactory
+                $container->scheduleFactory,
+                $container->playerVersionFactory
             );
         });
 
@@ -749,7 +803,8 @@ class State extends Middleware
                 $container->displayGroupFactory,
                 $container->widgetAudioFactory,
                 $container->displayFactory,
-                $container->scheduleFactory
+                $container->scheduleFactory,
+                $container->dataSetFactory
             );
         });
 
@@ -770,6 +825,28 @@ class State extends Middleware
             );
         });
 
+        $app->container->singleton('\Xibo\Controller\PlayerSoftware', function($container) {
+            return new \Xibo\Controller\PlayerSoftware(
+                $container->logService,
+                $container->sanitizerService,
+                $container->state,
+                $container->user,
+                $container->helpService,
+                $container->dateService,
+                $container->configService,
+                $container->pool,
+                $container->mediaFactory,
+                $container->playerVersionFactory,
+                $container->displayProfileFactory,
+                $container->moduleFactory,
+                $container->layoutFactory,
+                $container->widgetFactory,
+                $container->displayGroupFactory,
+                $container->displayFactory,
+                $container->scheduleFactory
+            );
+        });
+
         $app->container->singleton('\Xibo\Controller\Playlist', function($container) {
             return new \Xibo\Controller\Playlist(
                 $container->logService,
@@ -786,7 +863,9 @@ class State extends Middleware
                 $container->transitionFactory,
                 $container->widgetFactory,
                 $container->moduleFactory,
-                $container->userGroupFactory
+                $container->userGroupFactory,
+                $container->userFactory,
+                $container->tagFactory
             );
         });
 
@@ -814,11 +893,31 @@ class State extends Middleware
                 $container->configService,
                 $container->session,
                 $container->regionFactory,
+                $container->widgetFactory,
                 $container->permissionFactory,
                 $container->transitionFactory,
                 $container->moduleFactory,
                 $container->layoutFactory,
                 $container->userGroupFactory
+            );
+        });
+
+        $app->container->singleton('\Xibo\Controller\Report', function($container) {
+            return new \Xibo\Controller\Report(
+                $container->logService,
+                $container->sanitizerService,
+                $container->state,
+                $container->user,
+                $container->helpService,
+                $container->dateService,
+                $container->configService,
+                $container->store,
+                $container->timeSeriesStore,
+                $container->reportService,
+                $container->reportScheduleFactory,
+                $container->savedReportFactory,
+                $container->mediaFactory,
+                $container->userFactory
             );
         });
 
@@ -853,7 +952,8 @@ class State extends Middleware
                 $container->displayFactory,
                 $container->layoutFactory,
                 $container->mediaFactory,
-                $container->dayPartFactory
+                $container->dayPartFactory,
+                $container->scheduleReminderFactory
             );
         });
 
@@ -880,9 +980,9 @@ class State extends Middleware
                 $container->helpService,
                 $container->dateService,
                 $container->configService,
-                $container->settingsFactory,
                 $container->layoutFactory,
-                $container->userGroupFactory
+                $container->userGroupFactory,
+                $container->transitionFactory
             );
         });
 
@@ -896,11 +996,14 @@ class State extends Middleware
                 $container->dateService,
                 $container->configService,
                 $container->store,
+                $container->timeSeriesStore,
+                $container->reportService,
                 $container->displayFactory,
                 $container->layoutFactory,
                 $container->mediaFactory,
                 $container->userFactory,
-                $container->userGroupFactory
+                $container->userGroupFactory,
+                $container->displayGroupFactory
             );
         });
 
@@ -932,16 +1035,38 @@ class State extends Middleware
                 $container->dateService,
                 $container->configService,
                 $container->store,
+                $container->timeSeriesStore,
                 $container->pool,
                 $container->taskFactory,
                 $container->userFactory,
                 $container->userGroupFactory,
                 $container->layoutFactory,
                 $container->displayFactory,
-                $container->upgradeFactory,
                 $container->mediaFactory,
                 $container->notificationFactory,
                 $container->userNotificationFactory
+            );
+        });
+
+        $app->container->singleton('\Xibo\Controller\Tag', function($container) {
+            return new \Xibo\Controller\Tag(
+                $container->logService,
+                $container->sanitizerService,
+                $container->state,
+                $container->user,
+                $container->helpService,
+                $container->dateService,
+                $container->configService,
+                $container->store,
+                $container->displayGroupFactory,
+                $container->layoutFactory,
+                $container->tagFactory,
+                $container->userFactory,
+                $container->displayFactory,
+                $container->mediaFactory,
+                $container->scheduleFactory,
+                $container->campaignFactory,
+                $container->playlistFactory
             );
         });
 
@@ -972,20 +1097,6 @@ class State extends Middleware
             );
         });
 
-        $app->container->singleton('\Xibo\Controller\Upgrade', function($container) {
-            return new \Xibo\Controller\Upgrade(
-                $container->logService,
-                $container->sanitizerService,
-                $container->state,
-                $container->user,
-                $container->helpService,
-                $container->dateService,
-                $container->configService,
-                $container->store,
-                $container->upgradeFactory
-            );
-        });
-
         $app->container->singleton('\Xibo\Controller\User', function($container) {
             return new \Xibo\Controller\User(
                 $container->logService,
@@ -1008,7 +1119,9 @@ class State extends Middleware
                 $container->displayFactory,
                 $container->sessionFactory,
                 $container->displayGroupFactory,
-                $container->widgetFactory
+                $container->widgetFactory,
+                $container->playerVersionFactory,
+                $container->playlistFactory
             );
         });
 
@@ -1133,6 +1246,16 @@ class State extends Middleware
                 $container->permissionFactory,
                 $container->displayFactory,
                 $container->dateService
+            );
+        });
+
+        $container->singleton('dataSetRssFactory', function($container) {
+            return new \Xibo\Factory\DataSetRssFactory(
+                $container->store,
+                $container->logService,
+                $container->sanitizerService,
+                $container->user,
+                $container->userFactory
             );
         });
 
@@ -1304,14 +1427,30 @@ class State extends Middleware
             );
         });
 
+        $container->singleton('playerVersionFactory', function($container) {
+            return new \Xibo\Factory\PlayerVersionFactory(
+                $container->store,
+                $container->logService,
+                $container->sanitizerService,
+                $container->user,
+                $container->userFactory,
+                $container->configService,
+                $container->mediaFactory
+            );
+        });
+
         $container->singleton('playlistFactory', function($container) {
             return new \Xibo\Factory\PlaylistFactory(
                 $container->store,
                 $container->logService,
+                $container->configService,
                 $container->sanitizerService,
+                $container->user,
+                $container->userFactory,
                 $container->dateService,
                 $container->permissionFactory,
-                $container->widgetFactory
+                $container->widgetFactory,
+                $container->tagFactory
             );
         });
 
@@ -1343,11 +1482,36 @@ class State extends Middleware
             );
         });
 
+        $container->singleton('reportScheduleFactory', function($container) {
+            return new \Xibo\Factory\ReportScheduleFactory(
+                $container->store,
+                $container->logService,
+                $container->sanitizerService,
+                $container->user,
+                $container->userFactory,
+                $container->configService,
+                $container->pool,
+                $container->dateService
+            );
+        });
+
         $container->singleton('resolutionFactory', function($container) {
             return new \Xibo\Factory\ResolutionFactory(
                 $container->store,
                 $container->logService,
                 $container->sanitizerService
+            );
+        });
+
+        $container->singleton('savedReportFactory', function($container) {
+            return new \Xibo\Factory\SavedReportFactory(
+                $container->store,
+                $container->logService,
+                $container->sanitizerService,
+                $container->user,
+                $container->userFactory,
+                $container->configService,
+                $container->mediaFactory
             );
         });
 
@@ -1360,7 +1524,20 @@ class State extends Middleware
                 $container->pool,
                 $container->dateService,
                 $container->displayGroupFactory,
-                $container->dayPartFactory
+                $container->dayPartFactory,
+                $container->userFactory,
+                $container->scheduleReminderFactory
+            );
+        });
+
+        $container->singleton('scheduleReminderFactory', function($container) {
+            return new \Xibo\Factory\ScheduleReminderFactory(
+                $container->store,
+                $container->logService,
+                $container->sanitizerService,
+                $container->user,
+                $container->userFactory,
+                $container->configService
             );
         });
 
@@ -1370,14 +1547,6 @@ class State extends Middleware
                 $container->logService,
                 $container->sanitizerService,
                 $container->dateService
-            );
-        });
-
-        $container->singleton('settingsFactory', function($container) {
-            return new \Xibo\Factory\SettingsFactory(
-                $container->store,
-                $container->logService,
-                $container->sanitizerService
             );
         });
 
@@ -1402,17 +1571,6 @@ class State extends Middleware
                 $container->store,
                 $container->logService,
                 $container->sanitizerService
-            );
-        });
-
-        $container->singleton('upgradeFactory', function($container) {
-            return new \Xibo\Factory\UpgradeFactory(
-                $container->store,
-                $container->logService,
-                $container->sanitizerService,
-                $container,
-                $container->dateService,
-                $container->configService
             );
         });
 

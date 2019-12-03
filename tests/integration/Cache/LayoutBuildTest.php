@@ -50,7 +50,11 @@ class LayoutBuildTest extends LocalWebTestCase
         // Create a Layout
         $this->layout = $this->createLayout();
 
-        $response = $this->getEntityProvider()->post('/playlist/widget/text/' . $this->layout->regions[0]->playlists[0]['playlistId'], [
+        // Checkout
+        $layout = $this->getDraft($this->layout);
+
+        $response = $this->getEntityProvider()->post('/playlist/widget/text/' . $layout->regions[0]->regionPlaylist->playlistId);
+        $response = $this->getEntityProvider()->put('/playlist/widget/' . $response['widgetId'], [
             'text' => 'Widget A',
             'duration' => 100,
             'useDuration' => 1
@@ -64,7 +68,7 @@ class LayoutBuildTest extends LocalWebTestCase
         // Schedule the Layout "always" onto our display
         //  deleting the layout will remove this at the end
         $event = (new XiboSchedule($this->getEntityProvider()))->createEventLayout(
-            date('Y-m-d H:i:s', time()+3600),
+            date('Y-m-d H:i:s', time()),
             date('Y-m-d H:i:s', time()+7200),
             $this->layout->campaignId,
             [$this->display->displayGroupId],
@@ -72,6 +76,7 @@ class LayoutBuildTest extends LocalWebTestCase
             NULL,
             NULL,
             NULL,
+            0,
             0,
             0
         );
@@ -102,13 +107,18 @@ class LayoutBuildTest extends LocalWebTestCase
     public function testInvalidateCache()
     {
         // Make sure our Layout is already status 1
-        $this->assertTrue($this->layoutStatusEquals($this->layout, 3), 'Layout Status isnt as expected');
+        $this->assertTrue($this->layoutStatusEquals($this->layout, 3), 'Pre-Layout Status isnt as expected');
 
         // Make sure our Display is already DONE
-        $this->assertTrue($this->displayStatusEquals($this->display, Display::$STATUS_DONE), 'Display Status isnt as expected');
+        $this->assertTrue($this->displayStatusEquals($this->display, Display::$STATUS_DONE), 'Pre-Display Status isnt as expected');
 
-        // Build the Layout
-        $this->client->get('/tasks/2');
+        // Publish (which builds)
+        $response = $this->client->put('/layout/publish/' . $this->layout->layoutId, [
+            'publishNow' => 1
+        ], ['CONTENT_TYPE' => 'application/x-www-form-urlencoded']);
+        $response = json_decode($response, true);
+
+        $this->layout = $this->constructLayoutFromResponse($response['data']);
 
         // Check the Layout Status
         // Validate the layout status afterwards

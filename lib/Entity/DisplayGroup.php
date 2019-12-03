@@ -76,11 +76,19 @@ class DisplayGroup implements \JsonSerializable
 
     /**
      * @SWG\Property(
-     *  description="A flag indicating whether this displayGroup is dynamic",
+     *  description="Criteria for this dynamic group. A comma separated set of regular expressions to apply",
      * )
-     * @var int
+     * @var string
      */
     public $dynamicCriteria;
+
+    /**
+     * @SWG\Property(
+     *  description="Criteria for this dynamic group. A comma separated set of tags to apply",
+     * )
+     * @var string
+     */
+    public $dynamicCriteriaTags;
 
     /**
      * @SWG\Property(
@@ -95,6 +103,13 @@ class DisplayGroup implements \JsonSerializable
      * @var Tag[]
      */
     public $tags = [];
+    public $tagValues;
+
+    /**
+     * @SWG\Property(description="The display bandwidth limit")
+     * @var int
+     */
+    public $bandwidthLimit;
 
     /**
      * Minimum save options
@@ -188,6 +203,11 @@ class DisplayGroup implements \JsonSerializable
         $this->tagFactory = $tagFactory;
     }
 
+    public function __clone()
+    {
+        $this->displayGroupId = null;
+    }
+
     /**
      * Set child object dependencies
      * @param DisplayFactory $displayFactory
@@ -262,8 +282,9 @@ class DisplayGroup implements \JsonSerializable
 
     /**
      * Set the Media Status to Incomplete
+     * @param int[] $displayIds
      */
-    public function notify()
+    public function notify($displayIds = [])
     {
         if ($this->allowNotify) {
 
@@ -272,7 +293,13 @@ class DisplayGroup implements \JsonSerializable
             if ($this->collectRequired)
                 $notify->collectNow();
 
-            $notify->notifyByDisplayGroupId($this->displayGroupId);
+            if (count($displayIds) > 0) {
+                foreach ($displayIds as $displayId) {
+                    $notify->notifyByDisplayId($displayId);
+                }
+            } else {
+                $notify->notifyByDisplayGroupId($this->displayGroupId);
+            }
         }
     }
 
@@ -458,13 +485,20 @@ class DisplayGroup implements \JsonSerializable
      * Assign Tag
      * @param Tag $tag
      * @return $this
+     * @throws NotFoundException
      */
     public function assignTag($tag)
     {
         $this->load();
 
-        if (!in_array($tag, $this->tags))
-            $this->tags[] = $tag;
+        if ($this->tags != [$tag]) {
+
+            if (!in_array($tag, $this->tags)) {
+                $this->tags[] = $tag;
+            }
+        } else {
+            $this->getLog()->debug('No Tags to assign');
+        }
 
         return $this;
     }
@@ -473,14 +507,20 @@ class DisplayGroup implements \JsonSerializable
      * Unassign tag
      * @param Tag $tag
      * @return $this
+     * @throws NotFoundException
      */
     public function unassignTag($tag)
     {
+        $this->load();
         $this->tags = array_udiff($this->tags, [$tag], function($a, $b) {
             /* @var Tag $a */
             /* @var Tag $b */
             return $a->tagId - $b->tagId;
         });
+
+        $this->unassignTags[] = $tag;
+
+        $this->getLog()->debug('Tags after removal %s', json_encode($this->tags));
 
         return $this;
     }
@@ -493,18 +533,22 @@ class DisplayGroup implements \JsonSerializable
         if (!is_array($this->tags) || count($this->tags) <= 0)
             $this->tags = $this->tagFactory->loadByDisplayGroupId($this->displayGroupId);
 
-        $this->unassignTags = array_udiff($this->tags, $tags, function($a, $b) {
-            /* @var Tag $a */
-            /* @var Tag $b */
-            return $a->tagId - $b->tagId;
-        });
+        if ($this->tags != $tags) {
+            $this->unassignTags = array_udiff($this->tags, $tags, function ($a, $b) {
+                /* @var Tag $a */
+                /* @var Tag $b */
+                return $a->tagId - $b->tagId;
+            });
 
-        $this->getLog()->debug('Tags to be removed: ' . json_encode($this->unassignTags));
+            $this->getLog()->debug('Tags to be removed: %s', json_encode($this->unassignTags));
 
-        // Replace the arrays
-        $this->tags = $tags;
+            // Replace the arrays
+            $this->tags = $tags;
 
-        $this->getLog()->debug('Tags remaining: ' . json_encode($this->tags));
+            $this->getLog()->debug('Tags remaining: %s', json_encode($this->tags));
+        } else {
+            $this->getLog()->debug('Tags were not changed');
+        }
     }
 
     /**
@@ -569,7 +613,7 @@ class DisplayGroup implements \JsonSerializable
                 throw new DuplicateEntityException(sprintf(__('You already own a display group called "%s". Please choose another name.'), $this->displayGroup));
 
             // If we are dynamic, then make sure we have some criteria
-            if ($this->isDynamic == 1 && $this->dynamicCriteria == '')
+            if ($this->isDynamic == 1 && ($this->dynamicCriteria == '' && $this->dynamicCriteriaTags == ''))
                 throw new InvalidArgumentException(__('Dynamic Display Groups must have at least one Criteria specified.'), 'dynamicCriteria');
         }
     }
@@ -587,7 +631,8 @@ class DisplayGroup implements \JsonSerializable
             'manageLinks' => true,
             'manageDisplayLinks' => true,
             'manageDynamicDisplayLinks' => true,
-            'allowNotify' => true
+            'allowNotify' => true,
+            'saveTags' => true
         ], $options);
 
         // Should we allow notification or not?
@@ -604,26 +649,28 @@ class DisplayGroup implements \JsonSerializable
             $this->edit();
         }
 
-        // Tags
-        if (is_array($this->tags)) {
-            foreach ($this->tags as $tag) {
-                /* @var Tag $tag */
+        if ($options['saveTags']) {
+            // Tags
+            if (is_array($this->tags)) {
+                foreach ($this->tags as $tag) {
+                    /* @var Tag $tag */
 
-                $this->getLog()->debug('Assigning tag ' . $tag->tag);
+                    $this->getLog()->debug('Assigning tag ' . $tag->tag);
 
-                $tag->assignDisplayGroup($this->displayGroupId);
-                $tag->save();
+                    $tag->assignDisplayGroup($this->displayGroupId);
+                    $tag->save();
+                }
             }
-        }
 
-        // Remove unwanted ones
-        if (is_array($this->unassignTags)) {
-            foreach ($this->unassignTags as $tag) {
-                /* @var Tag $tag */
-                $this->getLog()->debug('Unassigning tag ' . $tag->tag);
+            // Remove unwanted ones
+            if (is_array($this->unassignTags)) {
+                foreach ($this->unassignTags as $tag) {
+                    /* @var Tag $tag */
+                    $this->getLog()->debug('Unassigning tag ' . $tag->tag);
 
-                $tag->unassignDisplayGroup($this->displayGroupId);
-                $tag->save();
+                    $tag->unassignDisplayGroup($this->displayGroupId);
+                    $tag->save();
+                }
             }
         }
 
@@ -683,6 +730,12 @@ class DisplayGroup implements \JsonSerializable
             ]);
         }
 
+        foreach ($this->tags as $tag) {
+            /* @var Tag $tag */
+            $tag->unassignDisplayGroup($this->displayGroupId);
+            $tag->save();
+        }
+
         // Delete assignments
         $this->removeAssignments();
 
@@ -715,14 +768,15 @@ class DisplayGroup implements \JsonSerializable
     private function add()
     {
         $this->displayGroupId = $this->getStore()->insert('
-          INSERT INTO displaygroup (DisplayGroup, IsDisplaySpecific, Description, `isDynamic`, `dynamicCriteria`, `userId`)
-            VALUES (:displayGroup, :isDisplaySpecific, :description, :isDynamic, :dynamicCriteria, :userId)
+          INSERT INTO displaygroup (DisplayGroup, IsDisplaySpecific, Description, `isDynamic`, `dynamicCriteria`, `dynamicCriteriaTags`, `userId`)
+            VALUES (:displayGroup, :isDisplaySpecific, :description, :isDynamic, :dynamicCriteria, :dynamicCriteriaTags, :userId)
         ', [
             'displayGroup' => $this->displayGroup,
             'isDisplaySpecific' => $this->isDisplaySpecific,
             'description' => $this->description,
             'isDynamic' => $this->isDynamic,
             'dynamicCriteria' => $this->dynamicCriteria,
+            'dynamicCriteriaTags' => $this->dynamicCriteriaTags,
             'userId' => $this->userId
         ]);
 
@@ -743,6 +797,8 @@ class DisplayGroup implements \JsonSerializable
               Description = :description,
               `isDynamic` = :isDynamic,
               `dynamicCriteria` = :dynamicCriteria,
+              `dynamicCriteriaTags` = :dynamicCriteriaTags,
+              `bandwidthLimit` = :bandwidthLimit,
               `userId` = :userId
            WHERE DisplayGroupID = :displayGroupId
           ', [
@@ -751,6 +807,8 @@ class DisplayGroup implements \JsonSerializable
             'displayGroupId' => $this->displayGroupId,
             'isDynamic' => $this->isDynamic,
             'dynamicCriteria' => $this->dynamicCriteria,
+            'dynamicCriteriaTags' => $this->dynamicCriteriaTags,
+            'bandwidthLimit' => $this->bandwidthLimit,
             'userId' => $this->userId
         ]);
     }
@@ -762,6 +820,8 @@ class DisplayGroup implements \JsonSerializable
      */
     private function manageDisplayLinks($manageDynamic = true)
     {
+        $difference = [];
+
         if ($this->isDynamic && $manageDynamic) {
 
             $this->getLog()->info('Managing Display Links for Dynamic Display Group %s', $this->displayGroup);
@@ -770,35 +830,44 @@ class DisplayGroup implements \JsonSerializable
 
             // Update the linked displays based on the filter criteria
             // these displays must be permission checked based on the owner of the group NOT the logged in user
-            $this->displays = $this->displayFactory->query(null, ['display' => $this->dynamicCriteria, 'userCheckUserId' => $this->getOwnerId()]);
+            $this->displays = $this->displayFactory->query(null, ['display' => $this->dynamicCriteria, 'tags' => $this->dynamicCriteriaTags, 'userCheckUserId' => $this->getOwnerId()]);
 
             $this->getLog()->debug('There are %d original displays and %d displays that match the filter criteria now.', count($originalDisplays), count($this->displays));
 
-            $difference = array_udiff($originalDisplays, $this->displays, function ($a, $b) {
-                /**
-                 * @var Display $a
-                 * @var Display $b
-                 */
-                return $a->getId() - $b->getId();
-            });
+            // Map our arrays to simple displayId lists
+            $displayIds = array_map(function ($element) { return $element->displayId; }, $this->displays);
+            $originalDisplayIds = array_map(function ($element) { return $element->displayId; }, $originalDisplays);
 
-            $this->notifyRequired = (count($difference) >= 0);
+            $difference = array_merge(array_diff($displayIds, $originalDisplayIds), array_diff($originalDisplayIds, $displayIds));
+
+            // This is a dynamic display group
+            // only manage the links that have changed
+            if (count($difference) > 0) {
+                $this->getLog()->debug(count($difference) . ' changes in dynamic Displays, will notify individually');
+
+                $this->notifyRequired = true;
+            } else {
+                $this->getLog()->debug('No changes in dynamic Displays, wont notify');
+
+                $this->notifyRequired = false;
+            }
         }
 
+        // Manage the links we've made either way
         // Link
         $this->linkDisplays();
 
         // Check if we should notify
         if ($this->notifyRequired) {
             // We must notify before we unlink
-            $this->notify();
-
-            // Don't do it again
-            $this->notifyRequired = false;
+            $this->notify($difference);
         }
 
         // Unlink
         $this->unlinkDisplays();
+
+        // Don't do it again
+        $this->notifyRequired = false;
     }
 
     /**

@@ -128,6 +128,48 @@ class WidgetFactory extends BaseFactory
     }
 
     /**
+     * Get Widget by its ID
+     *  first check the lkwidgetmedia table for any active links
+     *  if that fails, check the widgethistory table
+     *  in either case, if we find a widget that isn't a media record, then still throw not found
+     * @param int $widgetId
+     * @return int|null
+     * @throws \Xibo\Exception\NotFoundException
+     */
+    public function getWidgetForStat($widgetId)
+    {
+        // Try getting the widget directly
+        $row = $this->getStore()->select('
+            SELECT `widget`.widgetId, `lkwidgetmedia`.mediaId 
+              FROM `widget`
+                LEFT OUTER JOIN `lkwidgetmedia`
+                ON `lkwidgetmedia`.widgetId = `widget`.widgetId
+             WHERE `widget`.widgetId = :widgetId
+        ', [
+            'widgetId' => $widgetId
+        ]);
+
+        // The widget doesn't exist
+        if (count($row) <= 0) {
+            // Try and get the same from the widget history table
+            $row = $this->getStore()->select('
+                SELECT widgetId, mediaId 
+                  FROM `widgethistory`
+                 WHERE widgetId = :widgetId
+            ', [
+                'widgetId' => $widgetId
+            ]);
+
+            // The widget didn't ever exist
+            if (count($row) <= 0) {
+                throw new NotFoundException();
+            }
+        }
+
+        return ($row[0]['mediaId'] == null) ? null : intval($row[0]['mediaId']);
+    }
+
+    /**
      * Get widget by widget id
      * @param $widgetId
      * @return Widget
@@ -199,12 +241,13 @@ class WidgetFactory extends BaseFactory
               widget.displayOrder,
               `widget`.useDuration,
               `widget`.calculatedDuration,
+              `widget`.fromDt,
+              `widget`.toDt, 
+              `widget`.createdDt, 
+              `widget`.modifiedDt,
+              `widget`.calculatedDuration,
               `playlist`.name AS playlist
         ';
-
-        if (DBVERSION >= 139) {
-            $select .= ' , createdDt, modifiedDt ';
-        }
 
         if (is_array($sortOrder) && (in_array('`widget`', $sortOrder) || in_array('`widget` DESC', $sortOrder))) {
             // output a pseudo column for the widget name
@@ -225,6 +268,15 @@ class WidgetFactory extends BaseFactory
             ON `playlist`.playlistId = `widget`.playlistId
         ';
 
+        if ($this->getSanitizer()->getInt('showWidgetsFrom', $filterBy) === 1) {
+            $body .= '
+                    INNER JOIN `region`
+                        ON `region`.regionId = `playlist`.regionId
+                    INNER JOIN `layout`
+                        ON `layout`.layoutId = `region`.layoutId
+            ';
+        }
+
         if ($this->getSanitizer()->getInt('mediaId', $filterBy) !== null) {
             $body .= '
                 INNER JOIN `lkwidgetmedia`
@@ -235,6 +287,14 @@ class WidgetFactory extends BaseFactory
         }
 
         $body .= ' WHERE 1 = 1 ';
+
+        if ($this->getSanitizer()->getInt('showWidgetsFrom', $filterBy) === 1) {
+            $body .= ' AND layout.parentId IS NOT NULL ';
+        }
+
+        if ($this->getSanitizer()->getInt('showWidgetsFrom', $filterBy) === 2) {
+            $body .= ' AND playlist.regionId IS NULL ';
+        }
 
         // Permissions
         $this->viewPermissionSql('Xibo\Entity\Widget', $body, $params, 'widget.widgetId', 'widget.ownerId', $filterBy);
@@ -258,10 +318,10 @@ class WidgetFactory extends BaseFactory
             $body .= ' AND widget.widgetId IN (
                 SELECT widgetId
                   FROM `widget`
-                    INNER JOIN `lkregionplaylist`
-                    ON `widget`.playlistId = `lkregionplaylist`.playlistId
+                    INNER JOIN `playlist`
+                    ON `widget`.playlistId = `playlist`.playlistId
                     INNER JOIN `region`
-                    ON `region`.regionId = `lkregionplaylist`.regionId
+                    ON `region`.regionId = `playlist`.regionId
                     INNER JOIN `layout`
                     ON `layout`.layoutId = `region`.layoutId
                  WHERE layout.layout LIKE :layout
@@ -273,10 +333,10 @@ class WidgetFactory extends BaseFactory
             $body .= ' AND widget.widgetId IN (
                 SELECT widgetId
                   FROM `widget`
-                    INNER JOIN `lkregionplaylist`
-                    ON `widget`.playlistId = `lkregionplaylist`.playlistId
+                    INNER JOIN `playlist`
+                    ON `widget`.playlistId = `playlist`.playlistId
                     INNER JOIN `region`
-                    ON `region`.regionId = `lkregionplaylist`.regionId
+                    ON `region`.regionId = `playlist`.regionId
                  WHERE region.name LIKE :region
             )';
             $params['region'] = '%' . $this->getSanitizer()->getString('region', $filterBy) . '%';
@@ -291,6 +351,12 @@ class WidgetFactory extends BaseFactory
                  WHERE media.name LIKE :media
             )';
             $params['media'] = '%' . $this->getSanitizer()->getString('media', $filterBy) . '%';
+        }
+
+        // Playlist Like
+        if ($this->getSanitizer()->getString('playlist', $filterBy) != '') {
+            $terms = explode(',', $this->getSanitizer()->getString('playlist', $filterBy));
+            $this->nameFilter('playlist', 'name', $terms, $body, $params);
         }
 
         // Sorting?
@@ -310,7 +376,9 @@ class WidgetFactory extends BaseFactory
 
 
         foreach ($this->getStore()->select($sql, $params) as $row) {
-            $entries[] = $this->createEmpty()->hydrate($row, ['intProperties' => ['duration', 'createdDt', 'modifiedDt']]);
+            $entries[] = $this->createEmpty()->hydrate($row, ['intProperties' => [
+                'duration', 'useDuration', 'calculatedDuration', 'fromDt', 'toDt', 'createdDt', 'modifiedDt']
+            ]);
         }
 
         // Paging

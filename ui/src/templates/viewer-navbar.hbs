@@ -1,0 +1,45 @@
+<div class="viewer-navbar designer-{{type}}">
+
+    <div class="row">
+        <div class="viewer-navbar-controls col-xs-3">
+            {{!-- Paging controls --}}
+            {{#if pagingEnable}}
+                <div class="paging inline-editor-hide">
+                    <button type="button" id="left-btn" class="btn btn-sm btn-primary">
+                        <i class="fa fa-arrow-left"></i>
+                    </button>
+                    <button class="btn btn-sm btn-default" disabled>
+                        {{currentItem}} / {{totalItems}}
+                    </button>
+                    <button type="button" id="right-btn" class="btn btn-sm btn-primary">
+                        <i class="fa fa-arrow-right"></i>
+                    </button>
+                </div>
+            {{/if}}
+        </div>
+
+        <div class="viewer-navbar-content col-xs-9">
+            {{! Inline Editor templates}}
+            <div class="inline-editor-templates inline-editor-opened container-fluid"></div>
+
+            {{! Element Info}}
+            {{#if extra}}
+                <div class="info inline-editor-hide">
+                    <span class="label">
+                        "{{extra.moduleName}}" ({{extra.type}})
+                    </span>
+            
+                    <span class="label label-default">
+                        {{extra.duration}} / {{extra.regionDuration}}
+                    </span>
+                </div>
+            {{else}}
+                <div class="info inline-editor-hide">
+                    <span class="label">
+                        "{{name}}" ({{type}})
+                    </span>
+                </div>
+            {{/if}}
+        </div>
+    </div>
+</div>

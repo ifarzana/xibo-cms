@@ -50,11 +50,14 @@ class CampaignDeleteTest extends LocalWebTestCase
         // Create a Layout
         $this->layout = $this->createLayout();
 
-        $response = $this->getEntityProvider()->post('/playlist/widget/text/' . $this->layout->regions[0]->playlists[0]['playlistId'], [
-            'text' => 'Widget A',
-            'duration' => 100,
-            'useDuration' => 1
-        ]);
+        // Checkout
+        $layout = $this->getDraft($this->layout);
+
+        // Add a simple widget
+        $this->addSimpleWidget($layout);
+
+        // Check us in again
+        $this->layout = $this->publish($this->layout);
 
         // Build the layout
         $this->buildLayout($this->layout);
@@ -63,7 +66,7 @@ class CampaignDeleteTest extends LocalWebTestCase
         $this->campaign = (new XiboCampaign($this->getEntityProvider()))->create(Random::generateString());
 
         // Assign the Layout to the Campaign
-        $this->campaign->assignLayout($this->layout->layoutId);
+        $this->campaign->assignLayout([$this->layout->layoutId], [1]);
 
         // Create a Display
         $this->display = $this->createDisplay();
@@ -82,6 +85,7 @@ class CampaignDeleteTest extends LocalWebTestCase
             NULL,
             NULL,
             NULL,
+            0,
             0,
             0
         );
@@ -114,7 +118,7 @@ class CampaignDeleteTest extends LocalWebTestCase
         // Make sure our Display is already DONE
         $this->assertTrue($this->displayStatusEquals($this->display, Display::$STATUS_DONE), 'Display Status isnt as expected');
 
-        // Add the Layout we have prepared to the existing Campaign
+        // Delete the Campaign
         $this->client->delete('/campaign/' . $this->campaign->campaignId);
 
         // Validate the display status afterwards

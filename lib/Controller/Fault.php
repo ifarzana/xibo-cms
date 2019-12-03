@@ -20,7 +20,6 @@
  */
 namespace Xibo\Controller;
 
-use Xibo\Exception\AccessDeniedException;
 use Xibo\Factory\DisplayFactory;
 use Xibo\Factory\LogFactory;
 use Xibo\Helper\Environment;
@@ -76,7 +75,7 @@ class Fault extends Base
 
         $config = $this->getConfig();
         $data = [
-            'environmentCheck' => $config->CheckEnvironment(),
+            'environmentCheck' => $config->checkEnvironment(),
             'environmentFault' => $config->envFault,
             'environmentWarning' => $config->envWarning,
             'binLogError' => ($config->checkBinLogEnabled() && !$config->checkBinLogFormat()),
@@ -92,7 +91,7 @@ class Fault extends Base
         $this->setNoOutput(true);
 
         // Create a ZIP file
-        $tempFileName = $this->getConfig()->GetSetting('LIBRARY_LOCATION') . 'temp/' . Random::generateString();
+        $tempFileName = $this->getConfig()->getSetting('LIBRARY_LOCATION') . 'temp/' . Random::generateString();
         $zip = new \ZipArchive();
 
         $result = $zip->open($tempFileName, \ZipArchive::CREATE | \ZipArchive::OVERWRITE);
@@ -110,14 +109,20 @@ class Fault extends Base
         if (!$outputVersion && !$outputLog && !$outputEnvCheck && !$outputSettings && !$outputDisplays && !$outputDisplayProfile)
             throw new \InvalidArgumentException(__('Please select at least one option'));
 
+        $environmentVariables = [
+            'app_ver' => Environment::$WEBSITE_VERSION_NAME,
+            'XmdsVersion' => Environment::$XMDS_VERSION,
+            'XlfVersion' => Environment::$XLF_VERSION
+        ];
+
         // Should we output the version?
         if ($outputVersion) {
-            $zip->addFromString('version.json', json_encode($this->store->select('SELECT * FROM `version`', []), JSON_PRETTY_PRINT));
+            $zip->addFromString('version.json', json_encode($environmentVariables, JSON_PRETTY_PRINT));
         }
 
         // Should we output a log?
         if ($outputLog) {
-            $tempLogFile = $this->getConfig()->GetSetting('LIBRARY_LOCATION') . 'temp/log_' . Random::generateString();
+            $tempLogFile = $this->getConfig()->getSetting('LIBRARY_LOCATION') . 'temp/log_' . Random::generateString();
             $out = fopen($tempLogFile, 'w');
             fputcsv($out, ['logId', 'runNo', 'logDate', 'channel', 'page', 'function', 'message', 'display.display', 'type']);
 
@@ -137,7 +142,7 @@ class Fault extends Base
             $zip->addFromString('environment.json', json_encode(array_map(function ($element) {
                 unset($element['advice']);
                 return $element;
-            }, $this->getConfig()->CheckEnvironment()), JSON_PRETTY_PRINT));
+            }, $this->getConfig()->checkEnvironment()), JSON_PRETTY_PRINT));
         }
 
         // Output Settings
@@ -180,28 +185,29 @@ class Fault extends Base
         header('Content-Length: ' . filesize($tempFileName));
 
         // Send via Apache X-Sendfile header?
-        if ($this->getConfig()->GetSetting('SENDFILE_MODE') == 'Apache') {
+        if ($this->getConfig()->getSetting('SENDFILE_MODE') == 'Apache') {
             header("X-Sendfile: $tempFileName");
             $this->getApp()->halt(200);
         }
         // Send via Nginx X-Accel-Redirect?
-        if ($this->getConfig()->GetSetting('SENDFILE_MODE') == 'Nginx') {
+        if ($this->getConfig()->getSetting('SENDFILE_MODE') == 'Nginx') {
             header("X-Accel-Redirect: /download/temp/" . basename($tempFileName));
             $this->getApp()->halt(200);
         }
 
         // Return the file with PHP
         // Disable any buffering to prevent OOM errors.
+        while (ob_get_level() > 0) {
+            ob_end_clean();
+        }
         readfile($tempFileName);
+        exit;
     }
 
     public function debugOn()
     {
-        if ($this->getUser()->userTypeId != 1)
-            throw new AccessDeniedException();
-
-        $this->getConfig()->ChangeSetting('audit', 'DEBUG');
-        $this->getConfig()->ChangeSetting('ELEVATE_LOG_UNTIL', $this->getDate()->parse()->addMinutes(30)->format('U'));
+        $this->getConfig()->changeSetting('audit', 'DEBUG');
+        $this->getConfig()->changeSetting('ELEVATE_LOG_UNTIL', $this->getDate()->parse()->addMinutes(30)->format('U'));
 
         // Return
         $this->getState()->hydrate([
@@ -211,11 +217,8 @@ class Fault extends Base
 
     public function debugOff()
     {
-        if ($this->getUser()->userTypeId != 1)
-            throw new AccessDeniedException();
-
-        $this->getConfig()->ChangeSetting('audit', $this->getConfig()->GetSetting('RESTING_LOG_LEVEL'));
-        $this->getConfig()->ChangeSetting('ELEVATE_LOG_UNTIL', '');
+        $this->getConfig()->changeSetting('audit', $this->getConfig()->getSetting('RESTING_LOG_LEVEL'));
+        $this->getConfig()->changeSetting('ELEVATE_LOG_UNTIL', '');
 
         // Return
         $this->getState()->hydrate([

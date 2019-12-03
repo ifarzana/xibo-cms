@@ -45,7 +45,7 @@
                                 <th>{% trans "IP Address" %}</th>
                                 <th>{% trans "Browser" %}</th>
                                 <th>{% trans "Expires At" %}</th>
-                                <th></th>
+                                <th>{% trans "Row Menu" %}</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -65,7 +65,7 @@
                 "language": dataTablesLanguage,
                 serverSide: true, stateSave: true, stateDuration: 0,
                 stateLoadCallback: function (settings, callback) {
-                    var data;
+                    var data = {};
                     $.ajax({
                         type: "GET",
                         async: false,
@@ -120,6 +120,7 @@
 
             table.on('draw', dataTableDraw);
             table.on('processing.dt', dataTableProcessing);
+            dataTableAddButtons(table, $('#sessions_wrapper').find('.col-sm-6').eq(1));
         });
     </script>
 {% endblock %}

@@ -77,10 +77,17 @@ class MediaManager extends Base
 
     public function displayPage()
     {
+        $moduleFactory = $this->moduleFactory;
+        
         $this->getState()->template .= 'media-manager-page';
         $this->getState()->setData([
             // Users we have permission to see
-            'modules' => $this->moduleFactory->query(null, ['assignable' => 1])
+            'modules' => $this->moduleFactory->query(null, ['assignable' => 1, 'enabled' => 1]),
+            'assignableModules' => array_map(function($element) use ($moduleFactory) { 
+                    $module = $moduleFactory->createForInstall($element->class);
+                    $module->setModule($element);
+                    return $module;
+                }, $moduleFactory->getAssignableModules())
         ]);
     }
 
@@ -95,6 +102,8 @@ class MediaManager extends Base
             'region' => $this->getSanitizer()->getString('region'),
             'media' => $this->getSanitizer()->getString('media'),
             'type' => $this->getSanitizer()->getString('type'),
+            'playlist' => $this->getSanitizer()->getString('playlist'),
+            'showWidgetsFrom' => $this->getSanitizer()->getInt('showWidgetsFrom')
         ]));
         $widgetsCount = $this->widgetFactory->countLast();
 
@@ -107,7 +116,7 @@ class MediaManager extends Base
             $module = $this->moduleFactory->createWithWidget($widget);
 
             // Get a list of Layouts that this playlist uses
-            $layouts = $this->layoutFactory->query(null, ['playlistId' => $widget->playlistId]);
+            $layouts = $this->layoutFactory->query(null, ['playlistId' => $widget->playlistId, 'showDrafts' => 1]);
 
             $layoutNames = array_map(function($layout) {
                 return $layout->layout;
@@ -141,9 +150,23 @@ class MediaManager extends Base
                 continue;
             }
 
+            // for widgets on Playlist not inside of a region
+            $regionWidth = null;
+            $regionHeight = null;
+
+            // Get region dimensions
+            foreach ($regions as $region) {
+                $regionWidth = $region->width;
+                $regionHeight = $region->height;
+            }
 
             $row['buttons'][] = [
                 'id' => 'WidgetEditForm',
+                'class' => 'WidgetEditForm',
+                'dataAttributes' => [
+                    ['name' => 'region-width', 'value' => $regionWidth],
+                    ['name' => 'region-height', 'value' => $regionHeight]
+                ],
                 'url' => $this->urlFor('module.widget.edit.form', ['id' => $widget->widgetId]),
                 'text' => __('Edit')
             ];

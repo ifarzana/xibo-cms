@@ -20,28 +20,32 @@
  */
 namespace Xibo\Widget;
 
-use InvalidArgumentException;
+use Xibo\Exception\InvalidArgumentException;
 
 class ShellCommand extends ModuleWidget
 {
-    public function validate()
+
+    /**
+     * Javascript functions for the layout designer
+     */
+    public function layoutDesignerJavaScript()
     {
-        if ($this->getOption('windowsCommand') == '' && $this->getOption('linuxCommand') == '' && $this->getOption('commandCode') == '' && $this->getOption('webosCommand' == ''))
-            throw new InvalidArgumentException(__('You must enter a command'));
+        return 'shellcommand-designer-javascript';
     }
 
     /**
-     * Adds a Shell Command Widget
-     * @SWG\Post(
-     *  path="/playlist/widget/shellCommand/{playlistId}",
-     *  operationId="WidgetShellCommandAdd",
+     * Edit Widget
+     *
+     * @SWG\Put(
+     *  path="/playlist/widget/{widgetId}?shellCommand",
+     *  operationId="WidgetShellCommandEdit",
      *  tags={"widget"},
-     *  summary="Add a Shell Command Widget",
-     *  description="Add a new Shell Command Widget to the specified playlist",
+     *  summary="Edit a Shell Command Widget",
+     *  description="Edit a Shell Command Widget. This call will replace existing Widget object, all not supplied parameters will be set to default.",
      *  @SWG\Parameter(
-     *      name="playlistId",
+     *      name="widgetId",
      *      in="path",
-     *      description="The playlist ID to add a Widget to",
+     *      description="The WidgetId to Edit",
      *      type="integer",
      *      required=true
      *   ),
@@ -66,6 +70,13 @@ class ShellCommand extends ModuleWidget
      *      type="integer",
      *      required=false
      *  ),
+     *  @SWG\Parameter(
+     *      name="enableStat",
+     *      in="formData",
+     *      description="The option (On, Off, Inherit) to enable the collection of Widget Proof of Play statistics",
+     *      type="string",
+     *      required=false
+     *   ),
      *  @SWG\Parameter(
      *      name="windowsCommand",
      *      in="formData",
@@ -110,43 +121,11 @@ class ShellCommand extends ModuleWidget
      *   ),
      *  @SWG\Response(
      *      response=201,
-     *      description="successful operation",
-     *      @SWG\Schema(ref="#/definitions/Widget"),
-     *      @SWG\Header(
-     *          header="Location",
-     *          description="Location of the new widget",
-     *          type="string"
-     *      )
+     *      description="successful operation"
      *  )
      * )
-     */
-    public function add()
-    {
-        // Any Options (we need to encode shell commands, as they sit on the options rather than the raw
-        $this->setOption('name', $this->getSanitizer()->getString('name'));
-        $this->setUseDuration($this->getSanitizer()->getCheckbox('useDuration'));
-        $this->setDuration($this->getSanitizer()->getInt('duration', $this->getDuration()));
-
-        // Commands
-        $windows = $this->getSanitizer()->getString('windowsCommand');
-        $linux = $this->getSanitizer()->getString('linuxCommand');
-        $webos = $this->getSanitizer()->getString('webosCommand');
-
-        $this->setOption('launchThroughCmd', $this->getSanitizer()->getCheckbox('launchThroughCmd'));
-        $this->setOption('terminateCommand', $this->getSanitizer()->getCheckbox('terminateCommand'));
-        $this->setOption('useTaskkill', $this->getSanitizer()->getCheckbox('useTaskkill'));
-        $this->setOption('commandCode', $this->getSanitizer()->getString('commandCode'));
-        $this->setOption('windowsCommand', urlencode($windows));
-        $this->setOption('linuxCommand', urlencode($linux));
-        $this->setOption('webosCommand', urlencode($webos));
-
-        // Save the widget
-        $this->validate();
-        $this->saveWidget();
-    }
-
-    /**
-     * Edit Media
+     *
+     * @throws \Xibo\Exception\XiboException
      */
     public function edit()
     {
@@ -154,11 +133,13 @@ class ShellCommand extends ModuleWidget
         $this->setUseDuration($this->getSanitizer()->getCheckbox('useDuration'));
         $this->setDuration($this->getSanitizer()->getInt('duration', $this->getDuration()));
         $this->setOption('name', $this->getSanitizer()->getString('name'));
+        $this->setOption('enableStat', $this->getSanitizer()->getString('enableStat'));
 
         // Commands
         $windows = $this->getSanitizer()->getString('windowsCommand');
         $linux = $this->getSanitizer()->getString('linuxCommand');
         $webos = $this->getSanitizer()->getString('webosCommand');
+        $tizen = $this->getSanitizer()->getString('tizenCommand');
 
         $this->setOption('launchThroughCmd', $this->getSanitizer()->getCheckbox('launchThroughCmd'));
         $this->setOption('terminateCommand', $this->getSanitizer()->getCheckbox('terminateCommand'));
@@ -167,12 +148,14 @@ class ShellCommand extends ModuleWidget
         $this->setOption('windowsCommand', urlencode($windows));
         $this->setOption('linuxCommand', urlencode($linux));
         $this->setOption('webosCommand', urlencode($webos));
+        $this->setOption('tizenCommand', urlencode($tizen));
 
         // Save the widget
-        $this->validate();
+        $this->isValid();
         $this->saveWidget();
     }
 
+    /** @inheritdoc */
     public function preview($width, $height, $scaleOverride = 0)
     {
         if ($this->module->previewEnabled == 0)
@@ -181,34 +164,30 @@ class ShellCommand extends ModuleWidget
         $windows = $this->getOption('windowsCommand');
         $linux = $this->getOption('linuxCommand');
         $webos = $this->getOption('webosCommand');
+        $tizen = $this->getOption('tizenCommand');
 
-        if ($windows == '' && $linux == '') {
+        if ($windows == '' && $linux == '' && $webos == '' && $tizen == '') {
             return __('Stored Command: %s', $this->getOption('commandCode'));
-        }
-        else {
-
+        } else {
             $preview  = '<p>' . __('Windows Command') . ': ' . urldecode($windows) . '</p>';
             $preview .= '<p>' . __('Linux Command') . ': ' . urldecode($linux) . '</p>';
+            $preview .= '<p>' . __('webOS Command') . ': ' . urldecode($webos) . '</p>';
+            $preview .= '<p>' . __('Tizen Command') . ': ' . urldecode($tizen) . '</p>';
 
             return $preview;
         }
     }
 
-    public function hoverPreview()
-    {
-        return $this->Preview(0, 0);
-    }
-
+    /** @inheritdoc */
     public function isValid()
     {
-        // Client dependant
-        return 2;
+        if ($this->getOption('windowsCommand') == '' && $this->getOption('linuxCommand') == '' && $this->getOption('commandCode') == '' && $this->getOption('webosCommand' == '') && $this->getOption('tizenCommand') == '')
+            throw new InvalidArgumentException(__('You must enter a command'), 'command');
+
+        return self::$STATUS_PLAYER;
     }
 
-    /**
-     * @param array $data
-     * @return array
-     */
+    /** @inheritdoc */
     public function setTemplateData($data)
     {
         $data['commands'] = $this->commandFactory->query();

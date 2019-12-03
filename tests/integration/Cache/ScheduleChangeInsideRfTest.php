@@ -49,11 +49,18 @@ class ScheduleChangeInsideRfTest extends LocalWebTestCase
         // Create a Layout
         $this->layout = $this->createLayout();
 
-        $response = $this->getEntityProvider()->post('/playlist/widget/text/' . $this->layout->regions[0]->playlists[0]['playlistId'], [
+        // Checkout
+        $layout = $this->getDraft($this->layout);
+
+        $response = $this->getEntityProvider()->post('/playlist/widget/text/' . $layout->regions[0]->regionPlaylist->playlistId);
+        $response = $this->getEntityProvider()->put('/playlist/widget/' . $response['widgetId'], [
             'text' => 'Widget A',
             'duration' => 100,
             'useDuration' => 1
         ]);
+
+        // Check us in again
+        $this->layout = $this->publish($this->layout);
 
         $this->widget = (new XiboText($this->getEntityProvider()))->hydrate($response);
 
@@ -66,7 +73,7 @@ class ScheduleChangeInsideRfTest extends LocalWebTestCase
         // Schedule the Layout "always" onto our display
         //  deleting the layout will remove this at the end
         $this->event = (new XiboSchedule($this->getEntityProvider()))->createEventLayout(
-            date('Y-m-d H:i:s', time()+3600),
+            date('Y-m-d H:i:s', time()),
             date('Y-m-d H:i:s', time()+7200),
             $this->layout->campaignId,
             [$this->display->displayGroupId],
@@ -74,6 +81,7 @@ class ScheduleChangeInsideRfTest extends LocalWebTestCase
             NULL,
             NULL,
             NULL,
+            0,
             0,
             0
         );

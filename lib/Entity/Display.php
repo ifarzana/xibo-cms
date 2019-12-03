@@ -1,9 +1,10 @@
 <?php
-/*
- * Xibo - Digital Signage - http://www.xibo.org.uk
- * Copyright (C) 2015 Spring Signage Ltd
+/**
+ * Copyright (C) 2019 Xibo Signage Ltd
  *
- * This file (Display.php) is part of Xibo.
+ * Xibo - Digital Signage - http://www.xibo.org.uk
+ *
+ * This file is part of Xibo.
  *
  * Xibo is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as published by
@@ -18,8 +19,6 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with Xibo.  If not, see <http://www.gnu.org/licenses/>.
  */
-
-
 namespace Xibo\Entity;
 
 
@@ -51,7 +50,6 @@ class Display implements \JsonSerializable
     public static $STATUS_DOWNLOADING = 2;
     public static $STATUS_PENDING = 3;
 
-    private $_config;
     use EntityTrait;
 
     /**
@@ -206,12 +204,6 @@ class Display implements \JsonSerializable
     public $longitude;
 
     /**
-     * @SWG\Property(description="A JSON string representing the player installer that should be installed")
-     * @var string
-     */
-    public $versionInstructions;
-
-    /**
      * @SWG\Property(description="A string representing the player type")
      * @var string
      */
@@ -318,6 +310,40 @@ class Display implements \JsonSerializable
      * @var Tag[]
      */
     public $tags;
+    public $tagValues;
+
+    /**
+     * @SWG\Property(description="The configuration options that will overwrite Display Profile Config")
+     * @var string|array
+     */
+    public $overrideConfig = [];
+
+    /**
+     * @SWG\Property(description="The display bandwidth limit")
+     * @var int
+     */
+    public $bandwidthLimit;
+
+    /**
+     * @SWG\Property(description="The new CMS Address")
+     * @var string
+     */
+    public $newCmsAddress;
+
+    /**
+     * @SWG\Property(description="The new CMS Key")
+     * @var string
+     */
+    public $newCmsKey;
+
+    /** @var array The configuration from the Display Profile  */
+    private $profileConfig;
+
+    /** @var array Combined config */
+    private $combinedConfig;
+
+    /** @var \Xibo\Entity\DisplayProfile the resolved DisplayProfile for this Display */
+    private $_displayProfile;
 
     /**
      * Commands
@@ -438,6 +464,36 @@ class Display implements \JsonSerializable
     }
 
     /**
+     * @return \Xibo\Entity\DisplayProfile
+     */
+    public function getDisplayProfile()
+    {
+        if ($this->_displayProfile === null) {
+
+            try {
+                if ($this->displayProfileId == 0) {
+                    // Load the default profile
+                    $displayProfile = $this->displayProfileFactory->getDefaultByType($this->clientType);
+                } else {
+                    // Load the specified profile
+                    $displayProfile = $this->displayProfileFactory->getById($this->displayProfileId);
+                }
+            } catch (NotFoundException $e) {
+                $this->getLog()->error('Cannot get display profile');
+                $this->getLog()->debug($e->getTraceAsString());
+
+                $displayProfile = $this->displayProfileFactory->getUnknownProfile($this->clientType);
+            }
+
+            // Set our display profile
+            $this->_displayProfile = $displayProfile;
+
+        }
+
+        return $this->_displayProfile;
+    }
+
+    /**
      * Is this display auditing?
      * return bool
      */
@@ -460,6 +516,7 @@ class Display implements \JsonSerializable
 
     /**
      * Validate the Object as it stands
+     * @throws InvalidArgumentException
      */
     public function validate()
     {
@@ -471,22 +528,6 @@ class Display implements \JsonSerializable
 
         if ($this->wakeOnLanEnabled == 1 && $this->wakeOnLanTime == '')
             throw new InvalidArgumentException(__('Wake on Lan is enabled, but you have not specified a time to wake the display'), 'wakeonlan');
-
-        // Check the number of licensed displays
-        $maxDisplays = $this->config->GetSetting('MAX_LICENSED_DISPLAYS');
-
-        if ($maxDisplays > 0) {
-            $this->getLog()->debug('Testing licensed displays against %d maximum. Currently Licenced = %d, Licenced = %d.', $maxDisplays, $this->currentlyLicensed, $this->licensed);
-
-            if ($this->currentlyLicensed != $this->licensed && $this->licensed == 1) {
-                $countLicensed = $this->getStore()->select('SELECT COUNT(DisplayID) AS CountLicensed FROM display WHERE licensed = 1', []);
-
-                $this->getLog()->debug('There are %d licenced displays and we the maximum is %d', $countLicensed[0]['CountLicensed'], $maxDisplays);
-
-                if (intval($countLicensed[0]['CountLicensed']) + 1 > $maxDisplays)
-                    throw new InvalidArgumentException(sprintf(__('You have exceeded your maximum number of licensed displays. %d'), $maxDisplays), 'maxDisplays');
-            }
-        }
 
         // Broadcast Address
         if ($this->broadCastAddress != '' && !v::ip()->validate($this->broadCastAddress))
@@ -518,15 +559,51 @@ class Display implements \JsonSerializable
 
         if (!empty($this->latitude) && !v::latitude()->validate($this->latitude))
             throw new InvalidArgumentException(__('The latitude entered is not valid.'), 'latitude');
+
+        if ($this->bandwidthLimit !== null && !v::intType()->validate($this->bandwidthLimit)) {
+            throw new InvalidArgumentException(__('Bandwidth limit must be a whole number.'), 'bandwidthLimit');
+        }
+    }
+
+    /**
+     * Check if there is display slot available, returns true when there are display slots available, return false if there are no display slots available
+     * @return boolean
+     */
+    public function isDisplaySlotAvailable()
+    {
+        $maxDisplays = $this->config->GetSetting('MAX_LICENSED_DISPLAYS');
+
+        // Check the number of licensed displays
+        if ($maxDisplays > 0) {
+            $this->getLog()->debug('Testing authorised displays against %d maximum. Currently authorised = %d, authorised = %d.', $maxDisplays, $this->currentlyLicensed, $this->licensed);
+
+            if ($this->currentlyLicensed != $this->licensed && $this->licensed == 1) {
+                $countLicensed = $this->getStore()->select('SELECT COUNT(DisplayID) AS CountLicensed FROM display WHERE licensed = 1', []);
+
+                $this->getLog()->debug('There are %d authorised displays and we the maximum is %d', $countLicensed[0]['CountLicensed'], $maxDisplays);
+
+                if (intval($countLicensed[0]['CountLicensed']) + 1 > $maxDisplays) {
+                    return false;
+                }
+            }
+        }
+
+        return true;
     }
 
     /**
      * Load
+     * @throws NotFoundException
      */
     public function load()
     {
+        if ($this->loaded)
+            return;
+
         // Load this displays group membership
         $this->displayGroups = $this->displayGroupFactory->getByDisplayId($this->displayId);
+
+        $this->loaded = true;
     }
 
     /**
@@ -553,13 +630,24 @@ class Display implements \JsonSerializable
     {
         $options = array_merge([
             'validate' => true,
-            'audit' => true
+            'audit' => true,
+            'checkDisplaySlotAvailability' => true
         ], $options);
 
         $allowNotify = true;
 
         if ($options['validate'])
             $this->validate();
+
+        if ($options['checkDisplaySlotAvailability']) {
+            // Check if there are display slots available
+            $maxDisplays = $this->config->GetSetting('MAX_LICENSED_DISPLAYS');
+
+            if (!$this->isDisplaySlotAvailable()) {
+                throw new InvalidArgumentException(sprintf(__('You have exceeded your maximum number of authorised displays. %d'),
+                    $maxDisplays), 'maxDisplays');
+            }
+        }
 
         if ($this->displayId == null || $this->displayId == 0) {
             $this->add();
@@ -575,7 +663,7 @@ class Display implements \JsonSerializable
             $this->getLog()->audit('Display', $this->displayId, 'Display Saved', $this->getChangedProperties());
 
         // Trigger an update of all dynamic DisplayGroups
-        if ($this->hasPropertyChanged('display')) {
+        if ($this->hasPropertyChanged('display') || $this->hasPropertyChanged('tags')) {
             foreach ($this->displayGroupFactory->getByIsDynamic(1) as $group) {
                 /* @var DisplayGroup $group */
                 $group->setChildObjectDependencies($this->displayFactory, $this->layoutFactory, $this->mediaFactory, $this->scheduleFactory);
@@ -586,11 +674,14 @@ class Display implements \JsonSerializable
 
     /**
      * Delete
-     * @throws \Xibo\Exception\NotFoundException
+     * @throws XiboException
      */
     public function delete()
     {
         $this->load();
+
+        // Delete incidential references
+        $this->getStore()->update('DELETE FROM `requiredfile` WHERE displayId = :displayId', ['displayId' => $this->displayId]);
 
         // Remove our display from any groups it is assigned to
         foreach ($this->displayGroups as $displayGroup) {
@@ -615,27 +706,41 @@ class Display implements \JsonSerializable
     private function add()
     {
         $this->displayId = $this->getStore()->insert('
-            INSERT INTO display (display, auditingUntil, defaultlayoutid, license, licensed, inc_schedule, email_alert, alert_timeout, xmrChannel, xmrPubKey, lastCommandSuccess, macAddress)
-              VALUES (:display, :auditingUntil, :defaultlayoutid, :license, :licensed, :inc_schedule, :email_alert, :alert_timeout, :xmrChannel, :xmrPubKey, :lastCommandSuccess, :macAddress)
+            INSERT INTO display (display, auditingUntil, defaultlayoutid, license, licensed, lastAccessed, inc_schedule, email_alert, alert_timeout, clientAddress, xmrChannel, xmrPubKey, lastCommandSuccess, macAddress, lastChanged, lastWakeOnLanCommandSent, client_type, client_version, client_code, overrideConfig, newCmsAddress, newCmsKey)
+              VALUES (:display, :auditingUntil, :defaultlayoutid, :license, :licensed, :lastAccessed, :inc_schedule, :email_alert, :alert_timeout, :clientAddress, :xmrChannel, :xmrPubKey, :lastCommandSuccess, :macAddress, :lastChanged, :lastWakeOnLanCommandSent, :clientType, :clientVersion, :clientCode, :overrideConfig, :newCmsAddress, :newCmsKey)
         ', [
             'display' => $this->display,
             'auditingUntil' => 0,
             'defaultlayoutid' => $this->defaultLayoutId,
             'license' => $this->license,
-            'licensed' => 0,
+            'licensed' => $this->licensed,
+            'lastAccessed' => $this->lastAccessed,
             'inc_schedule' => 0,
             'email_alert' => 0,
             'alert_timeout' => 0,
+            'clientAddress' => $this->clientAddress,
             'xmrChannel' => $this->xmrChannel,
-            'xmrPubKey' => $this->xmrPubKey,
+            'xmrPubKey' => ($this->xmrPubKey === null) ? '' : $this->xmrPubKey,
             'lastCommandSuccess' => $this->lastCommandSuccess,
-            'macAddress' => $this->macAddress
+            'macAddress' => $this->macAddress,
+            'lastChanged' => ($this->lastChanged === null) ? 0 : $this->lastChanged,
+            'lastWakeOnLanCommandSent' => ($this->lastWakeOnLanCommandSent === null) ? 0 : $this->lastWakeOnLanCommandSent,
+            'clientType' => $this->clientType,
+            'clientVersion' => $this->clientVersion,
+            'clientCode' => $this->clientCode,
+            'overrideConfig' => ($this->overrideConfig == '') ? null : json_encode($this->overrideConfig),
+            'newCmsAddress' => null,
+            'newCmsKey' => null
         ]);
 
-        $displayGroup = $this->displayGroupFactory->createEmpty();
+
+        $displayGroup = $this->displayGroupFactory->create();
         $displayGroup->displayGroup = $this->display;
         $displayGroup->tags = $this->tags;
         $displayGroup->setDisplaySpecificDisplay($this);
+
+        $this->getLog()->debug('Creating display specific group with userId ' . $displayGroup->userId);
+
         $displayGroup->save();
     }
 
@@ -675,9 +780,11 @@ class Display implements \JsonSerializable
                     xmrChannel = :xmrChannel,
                     xmrPubKey = :xmrPubKey,
                     `lastCommandSuccess` = :lastCommandSuccess,
-                    `version_instructions` = :versionInstructions,
                     `deviceName` = :deviceName,
-                    `timeZone` = :timeZone
+                    `timeZone` = :timeZone,
+                    `overrideConfig` = :overrideConfig,
+                    `newCmsAddress` = :newCmsAddress,
+                    `newCmsKey` = :newCmsKey
              WHERE displayid = :displayId
         ', [
             'display' => $this->display,
@@ -696,7 +803,7 @@ class Display implements \JsonSerializable
             'cidr' => $this->cidr,
             'latitude' => $this->latitude,
             'longitude' => $this->longitude,
-            'displayProfileId' => $this->displayProfileId,
+            'displayProfileId' => ($this->displayProfileId == null) ? null : $this->displayProfileId,
             'lastAccessed' => $this->lastAccessed,
             'loggedIn' => $this->loggedIn,
             'clientAddress' => $this->clientAddress,
@@ -711,33 +818,42 @@ class Display implements \JsonSerializable
             'storageAvailableSpace' => $this->storageAvailableSpace,
             'storageTotalSpace' => $this->storageTotalSpace,
             'xmrChannel' => $this->xmrChannel,
-            'xmrPubKey' => $this->xmrPubKey,
+            'xmrPubKey' => ($this->xmrPubKey === null) ? '' : $this->xmrPubKey,
             'lastCommandSuccess' => $this->lastCommandSuccess,
-            'versionInstructions' => $this->versionInstructions,
             'deviceName' => $this->deviceName,
             'timeZone' => $this->timeZone,
+            'overrideConfig' => ($this->overrideConfig == '') ? null : json_encode($this->overrideConfig),
+            'newCmsAddress' => $this->newCmsAddress,
+            'newCmsKey' => $this->newCmsKey,
             'displayId' => $this->displayId
         ]);
 
         // Maintain the Display Group
-        if ($this->hasPropertyChanged('display') || $this->hasPropertyChanged('description') || $this->hasPropertyChanged('tags')) {
+        if ($this->hasPropertyChanged('display') || $this->hasPropertyChanged('description') || $this->hasPropertyChanged('tags') || $this->hasPropertyChanged('bandwidthLimit')) {
             $this->getLog()->debug('Display specific DisplayGroup properties need updating');
 
             $displayGroup = $this->displayGroupFactory->getById($this->displayGroupId);
             $displayGroup->displayGroup = $this->display;
             $displayGroup->description = $this->description;
             $displayGroup->replaceTags($this->tags);
+            $displayGroup->bandwidthLimit = $this->bandwidthLimit;
             $displayGroup->save(DisplayGroup::$saveOptionsMinimum);
         }
     }
 
     /**
      * Get the Settings Profile for this Display
+     * @param array $options
      * @return array
+     * @throws \Xibo\Exception\XiboException
      */
-    public function getSettings()
+    public function getSettings($options = [])
     {
-        return $this->setConfig();
+        $options = array_merge([
+            'displayOverride' => false
+        ], $options);
+
+        return $this->setConfig($options);
     }
 
     /**
@@ -746,7 +862,10 @@ class Display implements \JsonSerializable
     public function getCommands()
     {
         if ($this->commands == null) {
-            $this->setConfig();
+            $displayProfile = $this->getDisplayProfile();
+
+            // Set any commands
+            $this->commands = $displayProfile->commands;
         }
 
         return $this->commands;
@@ -756,18 +875,44 @@ class Display implements \JsonSerializable
      * Get a particular setting
      * @param string $key
      * @param mixed $default
+     * @param array $options
      * @return mixed
+     * @throws NotFoundException
      */
-    public function getSetting($key, $default)
+    public function getSetting($key, $default = null, $options = [])
     {
-        $this->setConfig();
+        $options = array_merge([
+            'displayOverride' => true,
+            'displayOnly' => false
+        ], $options);
+
+        $this->setConfig($options);
 
         // Find
         $return = $default;
-        foreach($this->_config as $row) {
-            if ($row['name'] == $key || $row['name'] == ucfirst($key)) {
-                $return = $row['value'];
-                break;
+        if ($options['displayOnly']) {
+            // Only get an option if set from the override config on this display
+            foreach ($this->overrideConfig as $row) {
+                if ($row['name'] == $key || $row['name'] == ucfirst($key)) {
+                    $return = array_key_exists('value', $row) ? $row['value'] : ((array_key_exists('default', $row)) ? $row['default'] : $default);
+                    break;
+                }
+            }
+        } else if ($options['displayOverride']) {
+            // Get the option from the combined array of config
+            foreach ($this->combinedConfig as $row) {
+                if ($row['name'] == $key || $row['name'] == ucfirst($key)) {
+                    $return = array_key_exists('value', $row) ? $row['value'] : ((array_key_exists('default', $row)) ? $row['default'] : $default);
+                    break;
+                }
+            }
+        } else {
+            // Get the option from the profile only
+            foreach ($this->profileConfig as $row) {
+                if ($row['name'] == $key || $row['name'] == ucfirst($key)) {
+                    $return = array_key_exists('value', $row) ? $row['value'] : ((array_key_exists('default', $row)) ? $row['default'] : $default);
+                    break;
+                }
             }
         }
 
@@ -776,32 +921,65 @@ class Display implements \JsonSerializable
 
     /**
      * Set the config array
+     * @param array $options
      * @return array
+     * @throws NotFoundException
      */
-    private function setConfig()
+    private function setConfig($options = [])
     {
-        if ($this->_config == null) {
+        $options = array_merge([
+            'displayOverride' => false
+        ], $options);
 
-            try {
-                if ($this->displayProfileId == 0) {
-                    // Load the default profile
-                    $displayProfile = $this->displayProfileFactory->getDefaultByType($this->clientType);
-                } else {
-                    // Load the specified profile
-                    $displayProfile = $this->displayProfileFactory->getById($this->displayProfileId);
-                }
-            } catch (NotFoundException $e) {
-                $this->getLog()->error('Cannot get display profile');
-                $this->getLog()->debug($e->getTraceAsString());
+        if ($this->profileConfig == null) {
+            $this->load();
 
-                $displayProfile = $this->displayProfileFactory->getUnknownProfile($this->clientType);
-            }
+            // Get the display profile
+            $displayProfile = $this->getDisplayProfile();
 
-            $this->_config = $displayProfile->getProfileConfig();
-            $this->commands = $displayProfile->commands;
+            // Merge in any overrides we have on our display.
+            $this->profileConfig = $displayProfile->getProfileConfig();
+            $this->combinedConfig = $this->mergeConfigs($this->profileConfig, $this->overrideConfig);
         }
 
-        return $this->_config;
+        return ($options['displayOverride']) ? $this->combinedConfig : $this->profileConfig;
+    }
+
+    /**
+     * Merge two configs
+     * @param $default
+     * @param $override
+     * @return array
+     */
+    private function mergeConfigs($default, $override)
+    {
+
+        foreach ($default as &$defaultItem) {
+            for ($i = 0; $i < count($override); $i++) {
+                if ($defaultItem['name'] == $override[$i]['name']) {
+
+                    // For special json fields, we need to decode, merge, encode and save instead
+                    if(in_array($defaultItem['name'], ['timers', 'pictureOptions', 'lockOptions']) && isset($defaultItem['value']) && isset($override[$i]['value'])) {
+
+                        // Decode values
+                        $defaultItemValueDecoded = json_decode($defaultItem['value'], true);
+                        $overrideValueDecoded = json_decode($override[$i]['value'], true);
+
+                        // Merge values, encode and save
+                        $defaultItem['value'] = json_encode(array_merge($defaultItemValueDecoded, $overrideValueDecoded));
+                        break;
+                    } else {
+                        // merge
+                        $defaultItem = array_merge($defaultItem, $override[$i]);
+                        break;
+                    }
+                    
+                }
+            }
+        }
+
+        // Merge the remainder
+        return $default;
     }
 
     /**
@@ -834,6 +1012,7 @@ class Display implements \JsonSerializable
      * @param PoolInterface $pool
      * @param int $currentLayoutId
      * @return $this
+     * @throws \Exception
      */
     public function setCurrentLayoutId($pool, $currentLayoutId)
     {
@@ -864,6 +1043,7 @@ class Display implements \JsonSerializable
      * @param PoolInterface $pool
      * @param string $date
      * @return $this
+     * @throws \Exception
      */
     public function setCurrentScreenShotTime($pool, $date)
     {

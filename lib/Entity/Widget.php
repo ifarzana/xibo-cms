@@ -1,9 +1,10 @@
 <?php
-/*
- * Xibo - Digital Signage - http://www.xibo.org.uk
- * Copyright (C) 2015 Spring Signage Ltd
+/**
+ * Copyright (C) 2019 Xibo Signage Ltd
  *
- * This file (Widget.php) is part of Xibo.
+ * Xibo - Digital Signage - http://www.xibo.org.uk
+ *
+ * This file is part of Xibo.
  *
  * Xibo is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as published by
@@ -18,8 +19,6 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with Xibo.  If not, see <http://www.gnu.org/licenses/>.
  */
-
-
 namespace Xibo\Entity;
 
 use Xibo\Exception\NotFoundException;
@@ -42,6 +41,9 @@ use Xibo\Widget\ModuleWidget;
  */
 class Widget implements \JsonSerializable
 {
+    public static $DATE_MIN = 0;
+    public static $DATE_MAX = 2147483647;
+
     use EntityTrait;
 
     /**
@@ -109,6 +111,42 @@ class Widget implements \JsonSerializable
     public $modifiedDt;
 
     /**
+     * @SWG\Property(description="Widget From Date")
+     * @var int
+     */
+    public $fromDt;
+
+    /**
+     * @SWG\Property(description="Widget To Date")
+     * @var int
+     */
+    public $toDt;
+
+    /**
+     * @SWG\Property(description="Transition Type In")
+     * @var int
+     */
+    public $transitionIn;
+
+    /**
+     * @SWG\Property(description="Transition Type out")
+     * @var int
+     */
+    public $transitionOut;
+
+    /**
+     * @SWG\Property(description="Transition duration in")
+     * @var int
+     */
+    public $transitionDurationIn;
+
+    /**
+     * @SWG\Property(description="Transition duration out")
+     * @var int
+     */
+    public $transitionDurationOut;
+
+    /**
      * @SWG\Property(description="An array of Widget Options")
      * @var WidgetOption[]
      */
@@ -151,7 +189,7 @@ class Widget implements \JsonSerializable
     private $mediaHash = null;
 
     /**
-     * Temporary Id used during import/upgrade
+     * Temporary Id used during import/upgrade/sub-playlist ordering
      * @var string read only string
      */
     public $tempId = null;
@@ -177,6 +215,7 @@ class Widget implements \JsonSerializable
      */
     public static $widgetMinDuration = 1;
 
+    //<editor-fold desc="Factories and Dependencies">
     /** @var  DateServiceInterface */
     private $dateService;
 
@@ -203,6 +242,7 @@ class Widget implements \JsonSerializable
 
     /** @var  PlaylistFactory */
     private $playlistFactory;
+    //</editor-fold>
 
     /**
      * Entity constructor.
@@ -272,6 +312,8 @@ class Widget implements \JsonSerializable
             . $this->displayOrder
             . $this->useDuration
             . $this->calculatedDuration
+            . $this->fromDt
+            . $this->toDt
             . json_encode($this->widgetOptions)
         );
     }
@@ -554,6 +596,75 @@ class Widget implements \JsonSerializable
     }
 
     /**
+     * @return bool true if this widget has an expiry date
+     */
+    public function hasExpiry()
+    {
+        return $this->toDt !== self::$DATE_MAX;
+    }
+
+    /**
+     * @return bool true if this widget has expired
+     */
+    public function isExpired()
+    {
+        return ($this->toDt !== self::$DATE_MAX && $this->dateService->parse($this->toDt, 'U') < $this->dateService->parse());
+    }
+
+    /**
+     * Calculates the duration of this widget according to some rules
+     * @param $module ModuleWidget
+     * @param bool $import
+     * @return $this
+     */
+    public function calculateDuration($module, $import = false)
+    {
+        $this->getLog()->debug('Calculating Duration - existing value is ' . $this->calculatedDuration);
+
+        // Does our widget have a durationIsPerItem and a Number of Items?
+        $numItems = $this->getOptionValue('numItems', 0);
+
+        // Determine the duration of this widget
+        if ($this->type === 'subplaylist') {
+            // We use the module to calculate the duration
+            $this->calculatedDuration = $module->getSubPlaylistResolvedDuration();
+
+        } else if ($this->getOptionValue('durationIsPerItem', 0) == 1 && $numItems > 1) {
+            // If we have paging involved then work out the page count.
+            $itemsPerPage = $this->getOptionValue('itemsPerPage', 0);
+            if ($itemsPerPage > 0) {
+                $numItems = ceil($numItems / $itemsPerPage);
+            }
+
+            // For import
+            // in the layout.xml file the duration associated with widget that has all the above parameters
+            // will already be the calculatedDuration ie $this->duration from xml is duration * (numItems/itemsPerPage)
+            // since we preserve the itemsPerPage, durationIsPerItem and numItems on imported layout, we need to ensure we set the duration correctly
+            // this will ensure that both, the widget duration and calculatedDuration will be correct on import.
+            if ($import) {
+                $this->duration = (($this->useDuration == 1) ? $this->duration / $numItems : $module->getModule()->defaultDuration);
+            }
+
+            $this->calculatedDuration = (($this->useDuration == 1) ? $this->duration : $module->getModule()->defaultDuration) * $numItems;
+        } else if ($this->useDuration == 1) {
+            // Widget duration is as specified
+            $this->calculatedDuration = $this->duration;
+
+        } else if ($this->type === 'video') {
+            // The calculated duration is the "real" duration (caters for 0 videos)
+            $this->calculatedDuration = $module->getDuration(['real' => true]);
+
+        } else {
+            // The module default duration.
+            $this->calculatedDuration = $module->getModule()->defaultDuration;
+        }
+
+        $this->getLog()->debug('Set to ' . $this->calculatedDuration);
+
+        return $this;
+    }
+
+    /**
      * Load the Widget
      */
     public function load()
@@ -591,18 +702,37 @@ class Widget implements \JsonSerializable
         $options = array_merge([
             'saveWidgetOptions' => true,
             'saveWidgetAudio' => true,
+            'saveWidgetMedia' => true,
             'notify' => true,
+            'notifyPlaylists' => true,
             'notifyDisplays' => false,
-            'audit' => true
+            'audit' => true,
+            'alwaysUpdate' => false
         ], $options);
 
-        $this->getLog()->debug('Saving widgetId %d with options. %s', $this->getId(), json_encode($options, JSON_PRETTY_PRINT));
+        $this->getLog()->debug('Saving widgetId ' . $this->getId() . ' with options. ' . json_encode($options, JSON_PRETTY_PRINT));
+
+        // if we are auditing get layout specific campaignId
+        if ($options['audit']) {
+            $campaignId = 0;
+            $layoutId = 0;
+            $sql = 'SELECT campaign.campaignId, layout.layoutId FROM playlist INNER JOIN region ON playlist.regionId = region.regionId INNER JOIN layout ON region.layoutId = layout.layoutId INNER JOIN lkcampaignlayout on layout.layoutId = lkcampaignlayout.layoutId INNER JOIN campaign ON campaign.campaignId = lkcampaignlayout.campaignId WHERE campaign.isLayoutSpecific = 1 AND playlist.playlistId = :playlistId ;';
+            $params = ['playlistId' => $this->playlistId];
+            $results = $this->store->select($sql, $params);
+            foreach ($results as $row) {
+                $campaignId = $row['campaignId'];
+                $layoutId = $row['layoutId'];
+            }
+        }
 
         // Add/Edit
-        if ($this->widgetId == null || $this->widgetId == 0)
+        $isNew = false;
+        if ($this->widgetId == null || $this->widgetId == 0) {
             $this->add();
-        else if ($this->hash != $this->hash())
+            $isNew = true;
+        } else if ($this->hash != $this->hash() || $options['alwaysUpdate']) {
             $this->update();
+        }
 
         // Save the widget options
         if ($options['saveWidgetOptions']) {
@@ -643,25 +773,48 @@ class Widget implements \JsonSerializable
         }
 
         // Manage the assigned media
-        $this->linkMedia();
-        $this->unlinkMedia();
+        if ($options['saveWidgetMedia'] || $options['saveWidgetAudio']) {
+            $this->linkMedia();
+            $this->unlinkMedia();
+        }
 
         // Call notify with the notify options passed in
         $this->notify($options);
 
         if ($options['audit']) {
-            $changedProperties = $this->getChangedProperties();
-            $changedItems = [];
+            if ($isNew) {
+                $changedProperties = null;
+                if ($campaignId != 0 && $layoutId != 0) {
+                    $this->audit($this->widgetId, 'Added', ['widgetId' => $this->widgetId, 'type' => $this->type, 'layoutId' => $layoutId, 'campaignId' => $campaignId]);
+                }
+            } else {
+                $changedProperties = $this->getChangedProperties();
+                $changedItems = [];
 
-            foreach ($this->widgetOptions as $widgetOption) {
-                $itemsProperties = $widgetOption->getChangedProperties();
+                foreach ($this->widgetOptions as $widgetOption) {
+                    $itemsProperties = $widgetOption->getChangedProperties();
 
-                if (count($itemsProperties) > 0)
-                    $changedItems[] = $itemsProperties;
-            }
+                    // for widget options what we get from getChangedProperities is an array with value as key and changed value as value
+                    // we want to override the key in the returned array, so that we get a clear option name that was changed
+                    if (array_key_exists('value', $itemsProperties)) {
+                        $itemsProperties[$widgetOption->option] = $itemsProperties['value'];
+                        unset($itemsProperties['value']);
+                    }
 
-            if (count($changedItems) > 0) {
-                $changedProperties['widgetOptions'] = $changedItems;
+                    if (count($itemsProperties) > 0) {
+                        $changedItems[] = $itemsProperties;
+                    }
+                }
+
+                if (count($changedItems) > 0) {
+                    $changedProperties['widgetOptions'] = json_encode($changedItems, JSON_PRETTY_PRINT);
+                }
+
+                // if we are editing a widget assigned to a regionPlaylist add the layout specific campaignId to the audit log
+                if ($campaignId != 0 && $layoutId != 0) {
+                    $changedProperties['campaignId'][] = $campaignId;
+                    $changedProperties['layoutId'][] = $layoutId;
+                }
             }
 
             $this->audit($this->widgetId, 'Saved', $changedProperties);
@@ -675,6 +828,8 @@ class Widget implements \JsonSerializable
     {
         $options = array_merge([
             'notify' => true,
+            'notifyPlaylists' => true,
+            'forceNotifyPlaylists' => true,
             'notifyDisplays' => false
         ], $options);
 
@@ -716,6 +871,9 @@ class Widget implements \JsonSerializable
         $this->notify($options);
 
         $this->getLog()->debug('Delete Widget Complete');
+
+        // Audit
+        $this->audit($this->widgetId, 'Deleted', ['widgetId' => $this->widgetId, 'playlistId' => $this->playlistId]);
     }
 
     /**
@@ -724,17 +882,44 @@ class Widget implements \JsonSerializable
      */
     private function notify($options)
     {
+        // By default we do nothing in here, options have to be explicitly enabled.
+        $options = array_merge([
+            'notify' => false,
+            'notifyPlaylists' => false,
+            'forceNotifyPlaylists' => false,
+            'notifyDisplays' => false
+        ], $options);
+
         $this->getLog()->debug('Notifying upstream playlist. Notify Layout: ' . $options['notify'] . ' Notify Displays: ' . $options['notifyDisplays']);
 
+        // Should we notify the Playlist
+        // we do this if the duration has changed on this widget.
+        if ($options['forceNotifyPlaylists']|| ($options['notifyPlaylists'] && (
+                $this->hasPropertyChanged('calculatedDuration')
+                || $this->hasPropertyChanged('fromDt')
+                || $this->hasPropertyChanged('toDt')
+            ))) {
+            // Notify the Playlist
+            $this->getStore()->update('UPDATE `playlist` SET requiresDurationUpdate = 1, `modifiedDT` = :modifiedDt WHERE playlistId = :playlistId', [
+                'playlistId' => $this->playlistId,
+                'modifiedDt' => $this->dateService->getLocalDate()
+            ]);
+        }
+
+        // Notify Layout
+        // We do this for draft and published versions of the Layout to keep the Layout Status fresh and the modified
+        // date updated.
         if ($options['notify']) {
             // Notify the Layout
             $this->getStore()->update('
                 UPDATE `layout` SET `status` = 3, `modifiedDT` = :modifiedDt WHERE layoutId IN (
                   SELECT `region`.layoutId
-                    FROM `lkregionplaylist`
+                    FROM `lkplaylistplaylist`
+                      INNER JOIN `playlist`
+                      ON `playlist`.playlistId = `lkplaylistplaylist`.parentId
                       INNER JOIN `region`
-                      ON region.regionId = `lkregionplaylist`.regionId
-                   WHERE `lkregionplaylist`.playlistId = :playlistId
+                      ON `region`.regionId = `playlist`.regionId 
+                   WHERE `lkplaylistplaylist`.childId = :playlistId
                 )
             ', [
                 'playlistId' => $this->playlistId,
@@ -743,6 +928,8 @@ class Widget implements \JsonSerializable
         }
 
         // Notify any displays (clearing their cache)
+        // this is typically done when there has been a dynamic change to the Widget - i.e. the Layout doesn't need
+        // to be rebuilt, but the Widget has some change that will be pushed out through getResource
         if ($options['notifyDisplays']) {
             $this->displayFactory->getDisplayNotifyService()->collectNow()->notifyByPlaylistId($this->playlistId);
         }
@@ -754,37 +941,43 @@ class Widget implements \JsonSerializable
 
         $this->isNew = true;
 
-        $params = [
+        $sql = '
+            INSERT INTO `widget` (`playlistId`, `ownerId`, `type`, `duration`, `displayOrder`, `useDuration`, `calculatedDuration`, `fromDt`, `toDt`, `createdDt`, `modifiedDt`)
+            VALUES (:playlistId, :ownerId, :type, :duration, :displayOrder, :useDuration, :calculatedDuration, :fromDt, :toDt, :createdDt, :modifiedDt)
+        ';
+
+        $this->widgetId = $this->getStore()->insert($sql, array(
             'playlistId' => $this->playlistId,
             'ownerId' => $this->ownerId,
             'type' => $this->type,
             'duration' => $this->duration,
             'displayOrder' => $this->displayOrder,
             'useDuration' => $this->useDuration,
-            'calculatedDuration' => $this->calculatedDuration
-        ];
-
-        $cols = '';
-        $vals = '';
-        if (DBVERSION >= 139) {
-            $cols = ', `createdDt`, `modifiedDt` ';
-            $vals = ', :createdDt, :modifiedDt ';
-
-            $params['createdDt'] = ($this->createdDt === null) ? time() : $this->createdDt;
-            $params['modifiedDt'] = time();
-        }
-
-        $sql = '
-            INSERT INTO `widget` (`playlistId`, `ownerId`, `type`, `duration`, `displayOrder`, `useDuration`, `calculatedDuration`' . $cols . ')
-            VALUES (:playlistId, :ownerId, :type, :duration, :displayOrder, :useDuration, :calculatedDuration' . $vals . ')
-        ';
-
-        $this->widgetId = $this->getStore()->insert($sql, $params);
+            'calculatedDuration' => $this->calculatedDuration,
+            'fromDt' => ($this->fromDt == null) ? self::$DATE_MIN : $this->fromDt,
+            'toDt' => ($this->toDt == null) ? self::$DATE_MAX : $this->toDt,
+            'createdDt' => ($this->createdDt === null) ? time() : $this->createdDt,
+            'modifiedDt' => time()
+        ));
     }
 
     private function update()
     {
         $this->getLog()->debug('Saving Widget ' . $this->type . ' on PlaylistId ' . $this->playlistId . ' WidgetId: ' . $this->widgetId);
+
+        $sql = '
+          UPDATE `widget` SET `playlistId` = :playlistId,
+            `ownerId` = :ownerId,
+            `type` = :type,
+            `duration` = :duration,
+            `displayOrder` = :displayOrder,
+            `useDuration` = :useDuration,
+            `calculatedDuration` = :calculatedDuration,
+            `fromDt` = :fromDt,
+            `toDt` = :toDt, 
+            `modifiedDt` = :modifiedDt
+           WHERE `widgetId` = :widgetId
+        ';
 
         $params = [
             'playlistId' => $this->playlistId,
@@ -794,28 +987,11 @@ class Widget implements \JsonSerializable
             'widgetId' => $this->widgetId,
             'displayOrder' => $this->displayOrder,
             'useDuration' => $this->useDuration,
-            'calculatedDuration' => $this->calculatedDuration
+            'calculatedDuration' => $this->calculatedDuration,
+            'fromDt' => ($this->fromDt == null) ? self::$DATE_MIN : $this->fromDt,
+            'toDt' => ($this->toDt == null) ? self::$DATE_MAX : $this->toDt,
+            'modifiedDt' => time()
         ];
-
-        $sql = '
-          UPDATE `widget` SET `playlistId` = :playlistId,
-            `ownerId` = :ownerId,
-            `type` = :type,
-            `duration` = :duration,
-            `displayOrder` = :displayOrder,
-            `useDuration` = :useDuration,
-            `calculatedDuration` = :calculatedDuration
-        ';
-
-        if (DBVERSION >= 139) {
-            $sql .= ' , modifiedDt = :modifiedDt ';
-
-            $params['modifiedDt'] = time();
-        }
-
-        $sql .= '
-           WHERE `widgetId` = :widgetId
-        ';
 
         $this->getStore()->update($sql, $params);
     }

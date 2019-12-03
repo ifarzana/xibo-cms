@@ -12,6 +12,9 @@
 {% block actionMenu %}
     <ul class="nav nav-pills pull-right">
         <li class="btn btn-success btn-xs"><a class="XiboFormButton btns" title="{% trans "Add an Application" %}" href="{{ urlFor("application.add.form") }}"> <i class="fa fa-plus-circle" aria-hidden="true"></i> {% trans "Add Application" %}</a></li>
+        {% if currentUser.isSuperAdmin() %}
+            <li class="btn btn-success btn-xs"><a class="XiboFormButton btns" title="{% trans "Add a DOOH Application" %}" href="{{ urlFor("application.addDooh.form") }}"> <i class="fa fa-plus-circle" aria-hidden="true"></i> {% trans "Add DOOH Application" %}</a></li>
+        {% endif %}
     </ul>
 {% endblock %}
 
@@ -33,7 +36,7 @@
                             <tr>
                                 <th>{% trans "Name" %}</th>
                                 <th>{% trans "Owner" %}</th>
-                                <th></th>
+                                <th>{% trans "Row Menu" %}</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -51,7 +54,7 @@
         var table = $("#applications").DataTable({ "language": dataTablesLanguage,
             serverSide: true, stateSave: true, stateDuration: 0,
             stateLoadCallback: function (settings, callback) {
-                var data;
+                var data = {};
                 $.ajax({
                     type: "GET",
                     async: false,
@@ -97,6 +100,7 @@
 
         table.on('draw', dataTableDraw);
         table.on('processing.dt', dataTableProcessing);
+        dataTableAddButtons(table, $('#applications_wrapper').find('.col-sm-6').eq(1));
         
         function copyFromSecretInput() {
             // Initialize the tooltip.

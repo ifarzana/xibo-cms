@@ -66,8 +66,13 @@ class AuditLog extends Base
         $filterUser = $this->getSanitizer()->getString('user');
         $filterEntity = $this->getSanitizer()->getString('entity');
         $filterEntityId = $this->getSanitizer()->getString('entityId');
+        $filterMessage = $this->getSanitizer()->getString('message');
 
         $search = [];
+
+        if ($filterFromDt != null && $filterFromDt == $filterToDt) {
+            $filterToDt->addDay(1);
+        }
 
         // Get the dates and times
         if ($filterFromDt == null)
@@ -79,14 +84,21 @@ class AuditLog extends Base
         $search['fromTimeStamp'] = $filterFromDt->format('U');
         $search['toTimeStamp'] = $filterToDt->format('U');
 
-        if ($filterUser != '')
+        if ($filterUser != '') {
             $search['userName'] = $filterUser;
+        }
 
-        if ($filterEntity != '')
+        if ($filterEntity != '') {
             $search['entity'] = $filterEntity;
+        }
 
-        if ($filterEntityId != null)
+        if ($filterEntityId != null) {
             $search['entityId'] = $filterEntityId;
+        }
+
+        if ($filterMessage != '') {
+            $search['message'] = $filterMessage;
+        }
 
         $rows = $this->auditLogFactory->query($this->gridRenderSort(), $this->gridRenderFilter($search));
 

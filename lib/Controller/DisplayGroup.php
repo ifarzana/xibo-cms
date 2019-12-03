@@ -1,7 +1,7 @@
 <?php
 /*
  * Xibo - Digital Signage - http://www.xibo.org.uk
- * Copyright (C) 2009-13 Daniel Garner
+ * Copyright (C) 2019 Xibo Signage Ltd
  *
  * This file is part of Xibo.
  *
@@ -21,10 +21,13 @@
 namespace Xibo\Controller;
 
 use Xibo\Entity\Display;
+use Xibo\Entity\Media;
 use Xibo\Exception\AccessDeniedException;
 use Xibo\Exception\ConfigurationException;
 use Xibo\Exception\InvalidArgumentException;
+use Xibo\Exception\NotFoundException;
 use Xibo\Exception\XiboException;
+use Xibo\Factory\CampaignFactory;
 use Xibo\Factory\CommandFactory;
 use Xibo\Factory\DisplayFactory;
 use Xibo\Factory\DisplayGroupFactory;
@@ -96,6 +99,11 @@ class DisplayGroup extends Base
     private $tagFactory;
 
     /**
+     * @var CampaignFactory
+     */
+    private $campaignFactory;
+
+    /**
      * Set common dependencies.
      * @param LogServiceInterface $log
      * @param SanitizerServiceInterface $sanitizerService
@@ -113,8 +121,9 @@ class DisplayGroup extends Base
      * @param CommandFactory $commandFactory
      * @param ScheduleFactory $scheduleFactory
      * @param TagFactory $tagFactory
+     * @param CampaignFactory $campaignFactory
      */
-    public function __construct($log, $sanitizerService, $state, $user, $help, $date, $config, $playerAction, $displayFactory, $displayGroupFactory, $layoutFactory, $moduleFactory, $mediaFactory, $commandFactory, $scheduleFactory, $tagFactory)
+    public function __construct($log, $sanitizerService, $state, $user, $help, $date, $config, $playerAction, $displayFactory, $displayGroupFactory, $layoutFactory, $moduleFactory, $mediaFactory, $commandFactory, $scheduleFactory, $tagFactory, $campaignFactory)
     {
         $this->setCommonDependencies($log, $sanitizerService, $state, $user, $help, $date, $config);
 
@@ -127,6 +136,7 @@ class DisplayGroup extends Base
         $this->commandFactory = $commandFactory;
         $this->scheduleFactory = $scheduleFactory;
         $this->tagFactory = $tagFactory;
+        $this->campaignFactory = $campaignFactory;
     }
 
     /**
@@ -217,10 +227,12 @@ class DisplayGroup extends Base
             'dynamicCriteria' => $this->getSanitizer()->getString('dynamicCriteria'),
             'tags' => $this->getSanitizer()->getString('tags'),
             'exactTags' => $this->getSanitizer()->getCheckbox('exactTags'),
-            'isDisplaySpecific' => $this->getSanitizer()->getInt('isDisplaySpecific')
+            'isDisplaySpecific' => $this->getSanitizer()->getInt('isDisplaySpecific'),
+            'displayGroupIdMembers' => $this->getSanitizer()->getInt('displayGroupIdMembers'),
+            'userId' => $this->getSanitizer()->getInt('userId')
         ];
 
-        $scheduleWithView = ($this->getConfig()->GetSetting('SCHEDULE_WITH_VIEW_PERMISSION') == 'Yes');
+        $scheduleWithView = ($this->getConfig()->getSetting('SCHEDULE_WITH_VIEW_PERMISSION') == 1);
 
         $displayGroups = $this->displayGroupFactory->query($this->gridRenderSort(), $this->gridRenderFilter($filter));
 
@@ -259,6 +271,12 @@ class DisplayGroup extends Base
                     'url' => $this->urlFor('displayGroup.edit.form', ['id' => $group->displayGroupId]),
                     'text' => __('Edit')
                 );
+
+                $group->buttons[] = array(
+                    'id' => 'displaygroup_button_copy',
+                    'url' => $this->urlFor('displayGroup.copy.form', ['id' => $group->displayGroupId]),
+                    'text' => __('Copy')
+                );
             }
 
             if ($this->getUser()->checkDeleteable($group)) {
@@ -266,7 +284,17 @@ class DisplayGroup extends Base
                 $group->buttons[] = array(
                     'id' => 'displaygroup_button_delete',
                     'url' => $this->urlFor('displayGroup.delete.form', ['id' => $group->displayGroupId]),
-                    'text' => __('Delete')
+                    'text' => __('Delete'),
+                    'multi-select' => true,
+                    'dataAttributes' => array(
+                        array('name' => 'commit-url', 'value' => $this->urlFor('displayGroup.delete', ['id' => $group->displayGroupId])),
+                        array('name' => 'commit-method', 'value' => 'delete'),
+                        array('name' => 'id', 'value' => 'displaygroup_button_delete'),
+                        array('name' => 'text', 'value' => __('Delete')),
+                        array('name' => 'rowtitle', 'value' => $group->displayGroup),
+                        ['name' => 'form-callback', 'value' => 'setDeleteMultiSelectFormOpen'],
+                        ['name' => 'form-confirm', 'value' => true]
+                    )
                 );
             }
 
@@ -294,13 +322,6 @@ class DisplayGroup extends Base
                     'id' => 'displaygroup_button_permissions',
                     'url' => $this->urlFor('user.permissions.form', ['entity' => 'DisplayGroup', 'id' => $group->displayGroupId]),
                     'text' => __('Permissions')
-                );
-
-                // Version Information
-                $group->buttons[] = array(
-                    'id' => 'display_button_version_instructions',
-                    'url' => $this->urlFor('displayGroup.version.form', ['id' => $group->displayGroupId]),
-                    'text' => __('Version Information')
                 );
             }
 
@@ -348,10 +369,25 @@ class DisplayGroup extends Base
         if (!$this->getUser()->checkEditable($displayGroup))
             throw new AccessDeniedException();
 
+        $tags = '';
+
+        $arrayOfTags = array_filter(explode(',', $displayGroup->tags));
+        $arrayOfTagValues = array_filter(explode(',', $displayGroup->tagValues));
+
+        for ($i=0; $i<count($arrayOfTags); $i++) {
+            if (isset($arrayOfTags[$i]) && (isset($arrayOfTagValues[$i]) && $arrayOfTagValues[$i] !== 'NULL' )) {
+                $tags .= $arrayOfTags[$i] . '|' . $arrayOfTagValues[$i];
+                $tags .= ',';
+            } else {
+                $tags .= $arrayOfTags[$i] . ',';
+            }
+        }
+
         $this->getState()->template = 'displaygroup-form-edit';
         $this->getState()->setData([
             'displayGroup' => $displayGroup,
-            'help' => $this->getHelp()->link('DisplayGroup', 'Edit')
+            'help' => $this->getHelp()->link('DisplayGroup', 'Edit'),
+            'tags' => $tags
         ]);
     }
 
@@ -439,9 +475,9 @@ class DisplayGroup extends Base
      *      required=true
      *   ),
      *  @SWG\Parameter(
-     *      name="dynamicContent",
+     *      name="dynamicCriteria",
      *      in="formData",
-     *      description="The filter criteria for this dynamic group. A command separated set of regular expressions to apply",
+     *      description="The filter criteria for this dynamic group. A comma separated set of regular expressions to apply",
      *      type="string",
      *      required=false
      *   ),
@@ -467,6 +503,8 @@ class DisplayGroup extends Base
         $displayGroup->tags = $this->tagFactory->tagsFromString($this->getSanitizer()->getString('tags'));
         $displayGroup->isDynamic = $this->getSanitizer()->getCheckbox('isDynamic');
         $displayGroup->dynamicCriteria = $this->getSanitizer()->getString('dynamicCriteria');
+        $displayGroup->dynamicCriteriaTags = $this->getSanitizer()->getString('dynamicCriteriaTags');
+
         $displayGroup->userId = $this->getUser()->userId;
         $displayGroup->save();
 
@@ -482,6 +520,9 @@ class DisplayGroup extends Base
     /**
      * Edits a Display Group
      * @param int $displayGroupId
+     *
+     * @throws XiboException
+     * @throws \Xibo\Exception\NotFoundException
      *
      * @SWG\Put(
      *  path="/displaygroup/{displayGroupId}",
@@ -551,6 +592,8 @@ class DisplayGroup extends Base
         $displayGroup->replaceTags($this->tagFactory->tagsFromString($this->getSanitizer()->getString('tags')));
         $displayGroup->isDynamic = $this->getSanitizer()->getCheckbox('isDynamic');
         $displayGroup->dynamicCriteria = ($displayGroup->isDynamic == 1) ? $this->getSanitizer()->getString('dynamicCriteria') : null;
+        $displayGroup->dynamicCriteriaTags = ($displayGroup->isDynamic == 1) ? $this->getSanitizer()->getString('dynamicCriteriaTags') : null;
+
         $displayGroup->save();
 
         // Return
@@ -564,6 +607,8 @@ class DisplayGroup extends Base
     /**
      * Deletes a Group
      * @param int $displayGroupId
+     *
+     * @throws \Xibo\Exception\NotFoundException
      *
      * @SWG\Delete(
      *  path="/displaygroup/{displayGroupId}",
@@ -694,7 +739,7 @@ class DisplayGroup extends Base
         }
 
         // Save the result
-        $displayGroup->save(['validate' => false]);
+        $displayGroup->save(['validate' => false, 'saveTags' => false]);
 
         // Save the displays themselves
         foreach ($modifiedDisplays as $display) {
@@ -774,7 +819,7 @@ class DisplayGroup extends Base
             $displayGroup->unassignDisplay($display);
         }
 
-        $displayGroup->save(['validate' => false]);
+        $displayGroup->save(['validate' => false, 'saveTags' => false]);
 
         // Return
         $this->getState()->hydrate([
@@ -867,7 +912,7 @@ class DisplayGroup extends Base
         }
 
         // Save the result
-        $displayGroup->save(['validate' => false]);
+        $displayGroup->save(['validate' => false, 'saveTags' => false]);
 
         // Return
         $this->getState()->hydrate([
@@ -933,7 +978,7 @@ class DisplayGroup extends Base
             $displayGroup->unassignDisplayGroup($this->displayGroupFactory->getById($assignDisplayGroupId));
         }
 
-        $displayGroup->save(['validate' => false]);
+        $displayGroup->save(['validate' => false, 'saveTags' => false]);
 
         // Return
         $this->getState()->hydrate([
@@ -1049,7 +1094,7 @@ class DisplayGroup extends Base
         }
 
         $displayGroup->setCollectRequired(false);
-        $displayGroup->save(['validate' => false]);
+        $displayGroup->save(['validate' => false, 'saveTags' => false]);
 
         // Return
         $this->getState()->hydrate([
@@ -1114,7 +1159,7 @@ class DisplayGroup extends Base
         }
 
         $displayGroup->setCollectRequired(false);
-        $displayGroup->save(['validate' => false]);
+        $displayGroup->save(['validate' => false, 'saveTags' => false]);
 
         // Return
         $this->getState()->hydrate([
@@ -1231,7 +1276,7 @@ class DisplayGroup extends Base
         }
 
         $displayGroup->setCollectRequired(false);
-        $displayGroup->save(['validate' => false]);
+        $displayGroup->save(['validate' => false, 'saveTags' => false]);
 
         // Return
         $this->getState()->hydrate([
@@ -1302,95 +1347,6 @@ class DisplayGroup extends Base
         $this->getState()->hydrate([
             'httpStatus' => 204,
             'message' => sprintf(__('Layouts unassigned from %s'), $displayGroup->displayGroup),
-            'id' => $displayGroup->displayGroupId
-        ]);
-    }
-
-    /**
-     * Version Form
-     * @param int $displayGroupId
-     */
-    public function versionForm($displayGroupId)
-    {
-        $displayGroup = $this->displayGroupFactory->getById($displayGroupId);
-
-        if (!$this->getUser()->checkEditable($displayGroup))
-            throw new AccessDeniedException();
-
-        // List of effected displays
-        $displays = $this->displayFactory->getByDisplayGroupId($displayGroupId);
-
-        $this->getState()->template = 'displaygroup-form-version';
-        $this->getState()->setData([
-            'displayGroup' => $displayGroup,
-            'displays' => $displays,
-            'help' => $this->getHelp()->link('DisplayGroup', 'Version')
-        ]);
-    }
-
-    /**
-     * Version Update
-     * @param int $displayGroupId
-     *
-     * @SWG\Post(
-     *  path="/displaygroup/{displayGroupId}/version",
-     *  operationId="displayGroupDisplayVersion",
-     *  tags={"displayGroup"},
-     *  summary="Set the Version for this Display",
-     *  description="Sets the version instructions on all Displays in the Group",
-     *  @SWG\Parameter(
-     *      name="displayGroupId",
-     *      type="integer",
-     *      in="path",
-     *      description="The Display Group ID",
-     *      required=true
-     *  ),
-     *  @SWG\Parameter(
-     *      name="mediaId",
-     *      type="integer",
-     *      in="formData",
-     *      description="The Media Id of the Installer File",
-     *      required=true
-     *  ),
-     *  @SWG\Response(
-     *      response=204,
-     *      description="successful operation"
-     *  )
-     * )
-     *
-     * @throws XiboException
-     */
-    public function version($displayGroupId)
-    {
-        $displayGroup = $this->displayGroupFactory->getById($displayGroupId);
-         $displayGroup->setChildObjectDependencies($this->displayFactory, $this->layoutFactory, $this->mediaFactory, $this->scheduleFactory);
-
-        if (!$this->getUser()->checkEditable($displayGroup))
-            throw new AccessDeniedException();
-
-        $media = $this->mediaFactory->getById($this->getSanitizer()->getInt('mediaId'));
-
-        if (!$this->getUser()->checkViewable($media))
-            throw new AccessDeniedException();
-
-        // Assign the media file
-        $displayGroup->assignMedia($media);
-        $displayGroup->setCollectRequired(true);
-
-        // Update each display in the group with the new version
-        foreach ($this->displayFactory->getByDisplayGroupId($displayGroupId) as $display) {
-            /* @var Display $display */
-            $display->versionInstructions = json_encode(['id' => $media->mediaId, 'file' => $media->storedAs]);
-            $display->save(['validate' => false]);
-        }
-
-        // Save the group (for the file assignment)
-        $displayGroup->save(['manageDisplayLinks' => false]);
-
-        // Return
-        $this->getState()->hydrate([
-            'httpStatus' => 204,
-            'message' => sprintf(__('Version set for %s'), $displayGroup->displayGroup),
             'id' => $displayGroup->displayGroupId
         ]);
     }
@@ -1504,7 +1460,7 @@ class DisplayGroup extends Base
      *  operationId="displayGroupActionChangeLayout",
      *  tags={"displayGroup"},
      *  summary="Action: Change Layout",
-     *  description="Send the change layout action to this DisplayGroup",
+     *  description="Send the change layout action to this DisplayGroup, you can pass layoutId or layout specific campaignId",
      *  @SWG\Parameter(
      *      name="displayGroupId",
      *      in="path",
@@ -1518,6 +1474,13 @@ class DisplayGroup extends Base
      *      description="The Layout Id",
      *      type="integer",
      *      required=true
+     *   ),
+     *  @SWG\Parameter(
+     *      name="campaignId",
+     *      in="formData",
+     *      description="The layout specific Campaign Id",
+     *      type="integer",
+     *      required=false
      *   ),
      *  @SWG\Parameter(
      *      name="duration",
@@ -1552,24 +1515,46 @@ class DisplayGroup extends Base
     {
         $displayGroup = $this->displayGroupFactory->getById($displayGroupId);
 
-        if (!$this->getUser()->checkEditable($displayGroup))
+        if (!$this->getUser()->checkEditable($displayGroup)) {
             throw new AccessDeniedException();
+        }
 
-        // Get the layoutId
+        // Get the layoutId or campaignId
         $layoutId = $this->getSanitizer()->getInt('layoutId');
+        $campaignId = $this->getSanitizer()->getInt('campaignId');
         $downloadRequired = ($this->getSanitizer()->getCheckbox('downloadRequired') == 1);
 
-        if ($layoutId == 0)
-            throw new \InvalidArgumentException(__('Please provide a Layout'));
+        if ($layoutId == 0 && $campaignId == 0) {
+            throw new InvalidArgumentException(__('Please provide a Layout ID or Campaign ID'), 'layoutId');
+        }
 
         // Check that this user has permissions to see this layout
-        $layout = $this->layoutFactory->getById($layoutId);
+        if ($layoutId != 0 && $campaignId == 0) {
+            $layout = $this->layoutFactory->getById($layoutId);
+        } elseif ($layoutId == 0 && $campaignId != 0) {
+            $campaign = $this->campaignFactory->getById($campaignId);
 
-        if (!$this->getUser()->checkViewable($layout))
+            if ($campaign->isLayoutSpecific == 0) {
+                throw new NotFoundException(__('Please provide Layout specific campaign ID'));
+            }
+
+            $layouts = $this->layoutFactory->getByCampaignId($campaignId);
+
+            if (count($layouts) <= 0) {
+                throw new NotFoundException(__('Cannot find layout by campaignId'));
+            }
+
+            $layout = $layouts[0];
+        } else {
+            throw new InvalidArgumentException(__('Please provide Layout id or Campaign id'), 'layoutId');
+        }
+
+        if (!$this->getUser()->checkViewable($layout)) {
             throw new AccessDeniedException();
+        }
 
         // Check to see if this layout is assigned to this display group.
-        if (count($this->layoutFactory->query(null, ['disableUserCheck' => 1, 'layoutId' => $layoutId, 'displayGroupId' => $displayGroupId])) <= 0) {
+        if (count($this->layoutFactory->query(null, ['disableUserCheck' => 1, 'layoutId' => $layout->layoutId, 'displayGroupId' => $displayGroupId])) <= 0) {
             // Assign
             $displayGroup->setChildObjectDependencies($this->displayFactory, $this->layoutFactory, $this->mediaFactory, $this->scheduleFactory);
             $displayGroup->load();
@@ -1579,7 +1564,7 @@ class DisplayGroup extends Base
             // notify will still occur if the layout isn't already assigned (which is shouldn't be)
             $displayGroup->setCollectRequired(false);
 
-            $displayGroup->save(['validate' => false]);
+            $displayGroup->save(['validate' => false, 'saveTags' => false]);
 
             // Convert into a download required
             $downloadRequired = true;
@@ -1594,7 +1579,7 @@ class DisplayGroup extends Base
 
         // Create and send the player action
         $this->playerAction->sendAction($this->displayFactory->getByDisplayGroupId($displayGroupId), (new ChangeLayoutAction())->setLayoutDetails(
-            $layoutId,
+            $layout->layoutId,
             $this->getSanitizer()->getInt('duration'),
             $downloadRequired,
             $this->getSanitizer()->getString('changeMode', 'queue')
@@ -1660,7 +1645,7 @@ class DisplayGroup extends Base
      *  operationId="displayGroupActionOverlayLayout",
      *  tags={"displayGroup"},
      *  summary="Action: Overlay Layout",
-     *  description="Send the overlay layout action to this DisplayGroup",
+     *  description="Send the overlay layout action to this DisplayGroup, you can pass layoutId or layout specific campaignId",
      *  @SWG\Parameter(
      *      name="displayGroupId",
      *      in="path",
@@ -1674,6 +1659,13 @@ class DisplayGroup extends Base
      *      description="The Layout Id",
      *      type="integer",
      *      required=true
+     *   ),
+     *  @SWG\Parameter(
+     *      name="campaignId",
+     *      in="formData",
+     *      description="The layout specific Campaign Id",
+     *      type="integer",
+     *      required=false
      *   ),
      *  @SWG\Parameter(
      *      name="duration",
@@ -1701,31 +1693,53 @@ class DisplayGroup extends Base
     {
         $displayGroup = $this->displayGroupFactory->getById($displayGroupId);
 
-        if (!$this->getUser()->checkEditable($displayGroup))
+        if (!$this->getUser()->checkEditable($displayGroup)) {
             throw new AccessDeniedException();
+        }
 
         // Get the layoutId
         $layoutId = $this->getSanitizer()->getInt('layoutId');
+        $campaignId = $this->getSanitizer()->getInt('campaignId');
         $downloadRequired = ($this->getSanitizer()->getCheckbox('downloadRequired') == 1);
 
-        if ($layoutId == 0)
-            throw new \InvalidArgumentException(__('Please provide a Layout'));
+        if ($layoutId == 0 && $campaignId == 0) {
+            throw new \InvalidArgumentException(__('Please provide a Layout ID or Campaign ID'));
+        }
 
         // Check that this user has permissions to see this layout
-        $layout = $this->layoutFactory->getById($layoutId);
+        if ($layoutId != 0 && $campaignId == 0) {
+            $layout = $this->layoutFactory->getById($layoutId);
+        } elseif ($layoutId == 0 && $campaignId != 0) {
+            $campaign = $this->campaignFactory->getById($campaignId);
 
-        if (!$this->getUser()->checkViewable($layout))
+            if ($campaign->isLayoutSpecific == 0) {
+                throw new NotFoundException(__('Please provide Layout specific campaign ID'));
+            }
+
+            $layouts = $this->layoutFactory->getByCampaignId($campaignId);
+
+            if (count($layouts) <= 0) {
+                throw new NotFoundException(__('Cannot find layout by campaignId'));
+            }
+
+            $layout = $layouts[0];
+        } else {
+            throw new InvalidArgumentException(__('Please provide Layout id or Campaign id'), 'layoutId');
+        }
+
+        if (!$this->getUser()->checkViewable($layout)) {
             throw new AccessDeniedException();
+        }
 
         // Check to see if this layout is assigned to this display group.
-        if (count($this->layoutFactory->query(null, ['disableUserCheck' => 1, 'layoutId' => $layoutId, 'displayGroupId' => $displayGroupId])) <= 0) {
+        if (count($this->layoutFactory->query(null, ['disableUserCheck' => 1, 'layoutId' => $layout->layoutId, 'displayGroupId' => $displayGroupId])) <= 0) {
             // Assign
             $displayGroup->setChildObjectDependencies($this->displayFactory, $this->layoutFactory, $this->mediaFactory, $this->scheduleFactory);
             $displayGroup->load();
             $displayGroup->assignLayout($layout);
             // Don't notify, this player action will cause a download.
             $displayGroup->setCollectRequired(false);
-            $displayGroup->save(['validate' => false]);
+            $displayGroup->save(['validate' => false, 'saveTags' => false]);
 
             // Convert into a download required
             $downloadRequired = true;
@@ -1739,7 +1753,7 @@ class DisplayGroup extends Base
         }
 
         $this->playerAction->sendAction($this->displayFactory->getByDisplayGroupId($displayGroupId), (new OverlayLayoutAction())->setLayoutDetails(
-            $layoutId,
+            $layout->layoutId,
             $this->getSanitizer()->getInt('duration'),
             $downloadRequired
         ));
@@ -1774,6 +1788,7 @@ class DisplayGroup extends Base
     /**
      * @param $displayGroupId
      * @throws ConfigurationException
+     * @throws XiboException
      * @throws \Xibo\Exception\NotFoundException
      *
      * @SWG\Post(
@@ -1826,6 +1841,193 @@ class DisplayGroup extends Base
             'httpStatus' => 204,
             'message' => sprintf(__('Command Sent to %s'), $displayGroup->displayGroup),
             'id' => $displayGroup->displayGroupId
+        ]);
+    }
+
+    /**
+     * @param $displayGroupId
+     * @throws \Xibo\Exception\NotFoundException
+     */
+    public function copyForm($displayGroupId)
+    {
+        // Create a form out of the config object.
+        $displayGroup = $this->displayGroupFactory->getById($displayGroupId);
+
+        if ($this->getUser()->userTypeId != 1 && $this->getUser()->userId != $displayGroup->userId)
+            throw new AccessDeniedException(__('You do not have permission to delete this profile'));
+
+        $this->getState()->template = 'displaygroup-form-copy';
+        $this->getState()->setData([
+            'displayGroup' => $displayGroup
+        ]);
+    }
+
+    /**
+     * Copy Display Group
+     * @param int $displayGroupId
+     * @throws \Xibo\Exception\XiboException
+     *
+     * @SWG\Post(
+     *  path="/displaygroup/{displayGroupId}/copy",
+     *  operationId="displayGroupCopy",
+     *  tags={"displayGroup"},
+     *  summary="Copy Display Group",
+     *  description="Copy an existing Display Group",
+     *  @SWG\Parameter(
+     *      name="displayGroupId",
+     *      in="path",
+     *      description="The Display Group ID",
+     *      type="integer",
+     *      required=true
+     *   ),
+     *  @SWG\Parameter(
+     *      name="displayGroup",
+     *      in="formData",
+     *      description="The name for the copy",
+     *      type="string",
+     *      required=true
+     *   ),
+     *  @SWG\Parameter(
+     *      name="description",
+     *      in="formData",
+     *      description="The description for the copy",
+     *      type="string",
+     *      required=false
+     *   ),
+     *  @SWG\Parameter(
+     *      name="copyMembers",
+     *      in="formData",
+     *      description="Flag indicating whether to copy all display and display group members",
+     *      type="integer",
+     *      required=false
+     *   ),
+     *  @SWG\Parameter(
+     *      name="copyAssignments",
+     *      in="formData",
+     *      description="Flag indicating whether to copy all layout and media assignments",
+     *      type="integer",
+     *      required=false
+     *   ),
+     *  @SWG\Parameter(
+     *      name="copyTags",
+     *      in="formData",
+     *      description="Flag indicating whether to copy all tags",
+     *      type="integer",
+     *      required=false
+     *   ),
+     *  @SWG\Response(
+     *      response=201,
+     *      description="successful operation",
+     *      @SWG\Schema(ref="#/definitions/DisplayGroup"),
+     *      @SWG\Header(
+     *          header="Location",
+     *          description="Location of the new record",
+     *          type="string"
+     *      )
+     *  )
+     * )
+     */
+    public function copy($displayGroupId)
+    {
+        // get display group object
+        $displayGroup = $this->displayGroupFactory->getById($displayGroupId);
+
+        if (!$this->getUser()->checkEditable($displayGroup)) {
+            throw new AccessDeniedException();
+        }
+
+        // get an array of assigned displays
+        $membersDisplays = $this->displayFactory->getByDisplayGroupId($displayGroupId);
+
+        // get an array of assigned display groups
+        $membersDisplayGroups = $this->displayGroupFactory->getByParentId($displayGroupId);
+
+        // get an array of assigned layouts
+        $assignedLayouts = $this->layoutFactory->getByDisplayGroupId($displayGroupId);
+
+        // get an array of assigned media files
+        $assignedFiles = $this->mediaFactory->getByDisplayGroupId($displayGroupId);
+
+        $copyMembers = $this->getSanitizer()->getCheckbox('copyMembers', 0);
+        $copyTags = $this->getSanitizer()->getCheckbox('copyTags', 0);
+        $copyAssignments = $this->getSanitizer()->getCheckbox('copyAssignments', 0);
+
+
+
+        $new = clone $displayGroup;
+
+        // handle display group members
+        if ($copyMembers && !$displayGroup->isDynamic) {
+
+            //copy display members
+            foreach ($membersDisplays as $display) {
+                $new->assignDisplay($display);
+            }
+
+            // copy display group members
+            foreach ($membersDisplayGroups as $dg) {
+                $new->assignDisplayGroup($dg);
+            }
+
+        }
+
+        // handle layout and file assignment
+        if ($copyAssignments) {
+
+            // copy layout assignments
+            foreach ($assignedLayouts as $layout) {
+                $new->assignLayout($layout);
+            }
+
+            // copy media assignments
+            foreach ($assignedFiles as $media) {
+                $new->assignMedia($media);
+            }
+        }
+
+        // Dynamic display group needs to have at least one criteria specified to be added, we always want to copy criteria when we copy dynamic display group
+        if ($displayGroup->isDynamic) {
+            $new->dynamicCriteria = $displayGroup->dynamicCriteria;
+            $new->dynamicCriteriaTags = $displayGroup->dynamicCriteriaTags;
+        }
+
+        // handle tags
+        if ($copyTags) {
+            $tags = '';
+
+            $arrayOfTags = array_filter(explode(',', $displayGroup->tags));
+            $arrayOfTagValues = array_filter(explode(',', $displayGroup->tagValues));
+
+            for ($i=0; $i<count($arrayOfTags); $i++) {
+                if (isset($arrayOfTags[$i]) && (isset($arrayOfTagValues[$i]) && $arrayOfTagValues[$i] !== 'NULL' )) {
+                    $tags .= $arrayOfTags[$i] . '|' . $arrayOfTagValues[$i];
+                    $tags .= ',';
+                } else {
+                    $tags .= $arrayOfTags[$i] . ',';
+                }
+            }
+            $new->replaceTags($this->tagFactory->tagsFromString($tags));
+        }
+
+        $new->displayGroup = $this->getSanitizer()->getString('displayGroup');
+        $new->description = $this->getSanitizer()->getString('description');
+        $new->setOwner($this->getUser()->userId);
+
+        // save without managing links, we need to save for new display group to get an ID, which is then used in next save to manage links - for dynamic groups.
+        // we also don't want to call notify at this point (for file/layout assignment)
+        $new->save(['manageDisplayLinks' => false, 'allowNotify' => false]);
+
+        // load the created display group and save along with display links and notify
+        $new->setChildObjectDependencies($this->displayFactory, $this->layoutFactory, $this->mediaFactory, $this->scheduleFactory);
+        $new->load();
+        $new->save();
+
+        // Return
+        $this->getState()->hydrate([
+            'httpStatus' => 201,
+            'message' => sprintf(__('Added %s'), $new->displayGroup),
+            'id' => $new->displayGroupId,
+            'data' => $new
         ]);
     }
 }

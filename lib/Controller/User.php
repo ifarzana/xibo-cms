@@ -1,14 +1,15 @@
 <?php
-/*
+/**
+ * Copyright (C) 2019 Xibo Signage Ltd
+ *
  * Xibo - Digital Signage - http://www.xibo.org.uk
- * Copyright (C) 2006-2015 Daniel Garner
  *
  * This file is part of Xibo.
  *
  * Xibo is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as published by
  * the Free Software Foundation, either version 3 of the License, or
- * any later version. 
+ * any later version.
  *
  * Xibo is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -20,6 +21,7 @@
  */
 namespace Xibo\Controller;
 
+use RobThree\Auth\TwoFactorAuth;
 use Xibo\Entity\Campaign;
 use Xibo\Entity\Layout;
 use Xibo\Entity\Media;
@@ -39,6 +41,8 @@ use Xibo\Factory\LayoutFactory;
 use Xibo\Factory\MediaFactory;
 use Xibo\Factory\PageFactory;
 use Xibo\Factory\PermissionFactory;
+use Xibo\Factory\PlayerVersionFactory;
+use Xibo\Factory\PlaylistFactory;
 use Xibo\Factory\ScheduleFactory;
 use Xibo\Factory\SessionFactory;
 use Xibo\Factory\UserFactory;
@@ -46,6 +50,8 @@ use Xibo\Factory\UserGroupFactory;
 use Xibo\Factory\UserTypeFactory;
 use Xibo\Factory\WidgetFactory;
 use Xibo\Helper\ByteFormatter;
+use Xibo\Helper\Random;
+use Xibo\Helper\QuickChartQRProvider;
 use Xibo\Service\ConfigServiceInterface;
 use Xibo\Service\DateServiceInterface;
 use Xibo\Service\LogServiceInterface;
@@ -119,6 +125,12 @@ class User extends Base
     /** @var WidgetFactory */
     private $widgetFactory;
 
+    /** @var PlayerVersionFactory */
+    private $playerVersionFactory;
+
+    /** @var PlaylistFactory */
+    private $playlistFactory;
+
     /**
      * Set common dependencies.
      * @param LogServiceInterface $log
@@ -142,10 +154,12 @@ class User extends Base
      * @param SessionFactory $sessionFactory
      * @param DisplayGroupFactory $displayGroupFactory
      * @param WidgetFactory $widgetFactory
+     * @param PlayerVersionFactory $playerVersionFactory
+     * @param PlaylistFactory $playlistFactory
      */
     public function __construct($log, $sanitizerService, $state, $user, $help, $date, $config, $userFactory,
                                 $userTypeFactory, $userGroupFactory, $pageFactory, $permissionFactory,
-                                $layoutFactory, $applicationFactory, $campaignFactory, $mediaFactory, $scheduleFactory, $displayFactory, $sessionFactory, $displayGroupFactory, $widgetFactory)
+                                $layoutFactory, $applicationFactory, $campaignFactory, $mediaFactory, $scheduleFactory, $displayFactory, $sessionFactory, $displayGroupFactory, $widgetFactory, $playerVersionFactory, $playlistFactory)
     {
         $this->setCommonDependencies($log, $sanitizerService, $state, $user, $help, $date, $config);
 
@@ -163,6 +177,8 @@ class User extends Base
         $this->sessionFactory = $sessionFactory;
         $this->displayGroupFactory = $displayGroupFactory;
         $this->widgetFactory = $widgetFactory;
+        $this->playerVersionFactory = $playerVersionFactory;
+        $this->playlistFactory = $playlistFactory;
     }
 
     /**
@@ -269,8 +285,23 @@ class User extends Base
             $user->loggedIn = $this->sessionFactory->getActiveSessionsForUser($user->userId);
             $this->getLog()->debug('Logged in status for user ID ' . $user->userId . ' with name ' . $user->userName . ' is ' . $user->loggedIn);
 
-            if ($this->isApi())
-                break;
+            // Set some text for the display status
+            switch ($user->twoFactorTypeId) {
+                case 1:
+                    $user->twoFactorDescription = __('Email');
+                    break;
+
+                case 2:
+                    $user->twoFactorDescription = __('Google Authenticator');
+                    break;
+
+                default:
+                    $user->twoFactorDescription = __('Disabled');
+            }
+
+            if ($this->isApi()) {
+                continue;
+            }
 
             $user->includeProperty('buttons');
             $user->homePage = __($user->homePage);
@@ -743,6 +774,7 @@ class User extends Base
         if ($this->getUser()->userTypeId == 1) {
             $newPassword = $this->getSanitizer()->getString('newPassword');
             $retypeNewPassword = $this->getSanitizer()->getString('retypeNewPassword');
+            $disableTwoFactor = $this->getSanitizer()->getCheckbox('disableTwoFactor');
 
             if ($newPassword != null && $newPassword != '') {
                 // Make sure they are the same
@@ -751,6 +783,11 @@ class User extends Base
 
                 // Set the new password
                 $user->setNewPassword($newPassword);
+            }
+
+            // super admin can clear the twoFactorTypeId and secret for the user.
+            if ($disableTwoFactor) {
+                $user->clearTwoFactor();
             }
         }
 
@@ -815,7 +852,7 @@ class User extends Base
             throw new AccessDeniedException();
 
         $user->setChildAclDependencies($this->userGroupFactory, $this->pageFactory);
-        $user->setChildObjectDependencies($this->campaignFactory, $this->layoutFactory, $this->mediaFactory, $this->scheduleFactory, $this->displayFactory, $this->displayGroupFactory, $this->widgetFactory);
+        $user->setChildObjectDependencies($this->campaignFactory, $this->layoutFactory, $this->mediaFactory, $this->scheduleFactory, $this->displayFactory, $this->displayGroupFactory, $this->widgetFactory, $this->playerVersionFactory, $this->playlistFactory);
 
         if ($this->getSanitizer()->getCheckbox('deleteAllItems') != 1) {
 
@@ -854,7 +891,7 @@ class User extends Base
             throw new AccessDeniedException(__('Only super and group admins can create users'));
 
         $defaultUserTypeId = 3;
-        foreach ($this->userTypeFactory->query(null, ['userType' => $this->getConfig()->GetSetting('defaultUsertype')] ) as $defaultUserType) {
+        foreach ($this->userTypeFactory->query(null, ['userType' => $this->getConfig()->getSetting('defaultUsertype')] ) as $defaultUserType) {
             $defaultUserTypeId = $defaultUserType->userTypeId;
         }
 
@@ -864,7 +901,7 @@ class User extends Base
                 'homepage' => $this->pageFactory->query(null, ['asHome' => 1]),
                 'groups' => $this->userGroupFactory->query(),
                 'userTypes' => ($this->getUser()->isSuperAdmin()) ? $this->userTypeFactory->getAllRoles() : $this->userTypeFactory->getNonAdminRoles(),
-                'defaultGroupId' => $this->getConfig()->GetSetting('DEFAULT_USERGROUP'),
+                'defaultGroupId' => $this->getConfig()->getSetting('DEFAULT_USERGROUP'),
                 'defaultUserType' => $defaultUserTypeId
             ],
             'help' => [
@@ -923,13 +960,22 @@ class User extends Base
 
     /**
      * Change my password form
+     * @throws \RobThree\Auth\TwoFactorAuthException
      */
-    public function changePasswordForm()
+    public function editProfileForm()
     {
-        $this->getState()->template = 'user-form-change-password';
+        $user = $this->getUser();
+
+        $this->getState()->template = 'user-form-edit-profile';
         $this->getState()->setData([
+            'user' => $user,
             'help' => [
-                'changePassword' => $this->getHelp()->link('User', 'ChangePassword')
+                'editProfile' => $this->getHelp()->link('User', 'EditProfile')
+            ],
+            'data' => [
+                'setup' => $this->urlFor('user.setup.profile'),
+                'generate' => $this->urlFor('user.recovery.generate.profile'),
+                'show' => $this->urlFor('user.recovery.show.profile'),
             ]
         ]);
     }
@@ -937,34 +983,212 @@ class User extends Base
     /**
      * Change my Password
      * @throws InvalidArgumentException
+     * @throws \RobThree\Auth\TwoFactorAuthException
+     * @throws XiboException
      */
-    public function changePassword()
+    public function editProfile()
     {
-        // Save the user
         $user = $this->getUser();
+        // Store current (before edit) value of twoFactorTypeId in a variable
+        $oldTwoFactorTypeId = $user->twoFactorTypeId;
+
+        // get all other values from the form
         $oldPassword = $this->getSanitizer()->getString('password');
         $newPassword = $this->getSanitizer()->getString('newPassword');
         $retypeNewPassword = $this->getSanitizer()->getString('retypeNewPassword');
+        $user->email = $this->getSanitizer()->getString('email');
+        $user->twoFactorTypeId = $this->getSanitizer()->getInt('twoFactorTypeId');
+        $code = $this->getSanitizer()->getString('code');
+        $recoveryCodes = $this->getSanitizer()->getStringArray('twoFactorRecoveryCodes');
 
-        if ($newPassword == null || $retypeNewPassword == '')
-            throw new InvalidArgumentException(__('Please enter the password'), 'password');
+        if ($user->isSuperAdmin()) {
+            $user->showContentFrom = $this->getSanitizer()->getInt('showContentFrom');
+        }
 
-        if ($newPassword != $retypeNewPassword)
+        if (!$user->isSuperAdmin() && $this->getSanitizer()->getInt('showContentFrom') == 2) {
+            throw new InvalidArgumentException(__('Option available only for Super Admins'), 'showContentFrom');
+        }
+
+        if ($recoveryCodes != null || $recoveryCodes != []) {
+            $user->twoFactorRecoveryCodes = json_decode($this->getSanitizer()->getStringArray('twoFactorRecoveryCodes'));
+        }
+
+        // check if we have a new password provided, if so check if it was correctly entered
+        if ($newPassword != $retypeNewPassword) {
             throw new InvalidArgumentException(__('Passwords do not match'), 'password');
+        }
 
-        $user->setNewPassword($newPassword, $oldPassword);
-        $user->save([
-            'passwordUpdate' => true
-        ]);
+        // check if we have saved secret, for google auth that is done on jQuery side
+        if (!isset($user->twoFactorSecret) && $user->twoFactorTypeId === 1) {
+            $this->tfaSetup();
+            $user->twoFactorSecret = $_SESSION['tfaSecret'];
+            unset($_SESSION['tfaSecret']);
+        }
 
-        $user->isPasswordChangeRequired = 0;
+        // if we are setting up email two factor auth, check if the email is entered on the form as well
+        if ($user->twoFactorTypeId === 1 && $user->email == '') {
+            throw new InvalidArgumentException(__('Please provide valid email address'), 'email');
+        }
+
+        // if we are setting up email two factor auth, check if the sending email address is entered in CMS Settings.
+        if ($user->twoFactorTypeId === 1 && $this->getConfig()->getSetting('mail_from') == '') {
+            throw new InvalidArgumentException(__('Please provide valid sending email address in CMS Settings on Network tab'), 'mail_from');
+        }
+
+        // if we have a new password provided, update the user record
+        if ($newPassword != null && $newPassword == $retypeNewPassword) {
+            $user->setNewPassword($newPassword, $oldPassword);
+            $user->isPasswordChangeRequired = 0;
+            $user->save([
+                'passwordUpdate' => true
+            ]);
+        }
+
+        // if we are setting up Google auth, we are expecting a code from the form, validate the code here
+        // we want to show QR code and validate the access code also with the previous auth method was set to email
+        if ($user->twoFactorTypeId === 2 && ($user->twoFactorSecret === null || $oldTwoFactorTypeId === 1)) {
+            if (!isset($code)) {
+                throw new InvalidArgumentException(__('Access Code is empty'), 'code');
+            }
+
+            $validation = $this->tfaValidate($code);
+
+            if (!$validation) {
+                unset($_SESSION['tfaSecret']);
+                throw new InvalidArgumentException(__('Access Code is incorrect'), 'code');
+            }
+
+            if ($validation) {
+                // if access code is correct, we want to set the secret to our user - either from session for new 2FA setup or leave it as it is for user changing from email to google auth
+                if (!isset($user->twoFactorSecret)) {
+                    $secret = $_SESSION['tfaSecret'];
+                } else {
+                    $secret = $user->twoFactorSecret;
+                }
+
+                $user->twoFactorSecret = $secret;
+                unset($_SESSION['tfaSecret']);
+            }
+        }
+
+        // if the two factor type is set to Off, clear any saved secrets and set the twoFactorTypeId to 0 in database.
+        if ($user->twoFactorTypeId == 0) {
+            $user->clearTwoFactor();
+        }
+
         $user->save();
 
         // Return
         $this->getState()->hydrate([
-            'message' => __('Password Changed'),
+            'message' => __('User Profile Saved'),
             'id' => $user->userId,
             'data' => $user
+        ]);
+    }
+
+    /**
+     * @throws XiboException
+     * @throws \RobThree\Auth\TwoFactorAuthException
+     */
+    public function tfaSetup()
+    {
+        $user = $this->getUser();
+
+        $issuerSettings = $this->getConfig()->getSetting('TWOFACTOR_ISSUER');
+        $appName = $this->getConfig()->getThemeConfig('app_name');
+        $quickChartUrl = $this->getConfig()->getSetting('QUICK_CHART_URL', 'https://quickchart.io');
+
+        if ($issuerSettings !== '') {
+            $issuer = $issuerSettings;
+        } else {
+            $issuer = $appName;
+        }
+
+        $tfa = new TwoFactorAuth($issuer, 6, 30, 'sha1', new QuickChartQRProvider($quickChartUrl));
+
+        // create two factor secret and store it in user record
+        if (!isset($user->twoFactorSecret)) {
+            $secret = $tfa->createSecret();
+            $_SESSION['tfaSecret'] = $secret;
+        } else {
+            $secret = $user->twoFactorSecret;
+        }
+
+        // generate the QR code to scan, we only show it at first set up and only for Google auth
+        $qRUrl = $tfa->getQRCodeImageAsDataUri($user->userName, $secret, 150);
+
+        $this->getState()->setData([
+            'qRUrl' => $qRUrl
+        ]);
+    }
+
+    /**
+     * @param string $code The Code to validate
+     * @return bool
+     * @throws \RobThree\Auth\TwoFactorAuthException
+     */
+    public function tfaValidate($code)
+    {
+        $user = $this->getUser();
+        $issuerSettings = $this->getConfig()->getSetting('TWOFACTOR_ISSUER');
+        $appName = $this->getConfig()->getThemeConfig('app_name');
+
+        if ($issuerSettings !== '') {
+            $issuer = $issuerSettings;
+        } else {
+            $issuer = $appName;
+        }
+
+        $tfa = new TwoFactorAuth($issuer);
+
+        if (isset($_SESSION['tfaSecret'])) {
+            // validate the provided two factor code with secret for this user
+            $result = $tfa->verifyCode($_SESSION['tfaSecret'], $code, 2);
+        } elseif (isset($user->twoFactorSecret)) {
+            $result = $tfa->verifyCode($user->twoFactorSecret, $code, 2);
+        } else {
+            $result = false;
+        }
+
+        return $result;
+    }
+
+    public function tfaRecoveryGenerate()
+    {
+        $user = $this->getUser();
+
+        // clear any existing codes when we generate new ones
+        $user->twoFactorRecoveryCodes = [];
+
+        $count = 4;
+        $codes = [];
+
+        for ($i = 0; $i < $count; $i++) {
+            $codes[] = $this->getSanitizer()->string(Random::generateString(50));
+        }
+
+        $user->twoFactorRecoveryCodes =  $codes;
+
+        $this->getState()->setData([
+            'codes' => json_encode($codes, JSON_PRETTY_PRINT)
+        ]);
+
+        return $codes;
+    }
+
+    public function tfaRecoveryShow()
+    {
+        $user = $this->getUser();
+
+        $user->twoFactorRecoveryCodes = json_decode($user->twoFactorRecoveryCodes);
+
+        if (isset($_GET["generatedCodes"]) && !empty($_GET["generatedCodes"])) {
+            $generatedCodes = $_GET["generatedCodes"];
+            $user->twoFactorRecoveryCodes = json_encode($generatedCodes);
+        }
+
+        $this->getState()->setData([
+            'codes' => $user->twoFactorRecoveryCodes
         ]);
     }
 
@@ -1188,7 +1412,7 @@ class User extends Base
 
             if ($object->canChangeOwner()) {
                 $object->setOwner($ownerId);
-                $object->save(['notify' => false]);
+                $object->save(['notify' => false, 'manageDynamicDisplayLinks' => false]);
             } else {
                 throw new ConfigurationException(__('Cannot change owner on this Object'));
             }
@@ -1217,22 +1441,19 @@ class User extends Base
                 foreach ($layout->regions as $region) {
                     /* @var Region $region */
                     $this->updatePermissions($this->permissionFactory->getAllByObjectId($this->getUser(), get_class($region), $region->getId()), $groupIds);
-
                     // Playlists
-                    foreach ($region->playlists as $playlist) {
-                        /* @var Playlist $playlist */
-                        $this->updatePermissions($this->permissionFactory->getAllByObjectId($this->getUser(), get_class($playlist), $playlist->getId()), $groupIds);
-
-                        // Widgets
-                        foreach ($playlist->widgets as $widget) {
-                            /* @var Widget $widget */
-                            $this->updatePermissions($this->permissionFactory->getAllByObjectId($this->getUser(), get_class($widget), $widget->getId()), $groupIds);
-                        }
+                    /* @var Playlist $playlist */
+                    $playlist = $region->regionPlaylist;
+                    $this->updatePermissions($this->permissionFactory->getAllByObjectId($this->getUser(), get_class($playlist), $playlist->getId()), $groupIds);
+                    // Widgets
+                    foreach ($playlist->widgets as $widget) {
+                        /* @var Widget $widget */
+                        $this->updatePermissions($this->permissionFactory->getAllByObjectId($this->getUser(), get_class($widget), $widget->getId()), $groupIds);
                     }
                 }
             };
 
-            foreach ($this->layoutFactory->getByCampaignId($object->campaignId) as $layout) {
+            foreach ($this->layoutFactory->getByCampaignId($object->campaignId, true, true) as $layout) {
                 /* @var Layout $layout */
                 // Assign the same permissions to the Layout
                 $this->updatePermissions($this->permissionFactory->getAllByObjectId($this->getUser(), get_class($object), $layout->campaignId), $groupIds);
@@ -1244,12 +1465,15 @@ class User extends Base
             }
         } else if ($object->permissionsClass() == 'Xibo\Entity\Region') {
             // We always cascade region permissions down to the Playlist
-            // TODO: we should change this to $object->regionPlaylist in 2.0
+            $object->load(['loadPlaylists' => true]);
+
+            $this->updatePermissions($this->permissionFactory->getAllByObjectId($this->getUser(), get_class($object->regionPlaylist), $object->regionPlaylist->getId()), $groupIds);
+        } else if ($object->permissionsClass() == 'Xibo\Entity\Playlist' && $this->getSanitizer()->getCheckbox('cascade') == 1) {
             $object->load();
 
-            foreach ($object->playlists as $playlist) {
-                /* @var Playlist $playlist */
-                $this->updatePermissions($this->permissionFactory->getAllByObjectId($this->getUser(), get_class($playlist), $playlist->getId()), $groupIds);
+            // Push the permissions down to each Widget
+            foreach ($object->widgets as $widget) {
+                $this->updatePermissions($this->permissionFactory->getAllByObjectId($this->getUser(), get_class($widget), $widget->getId()), $groupIds);
             }
         } else if ($object->permissionsClass() == 'Xibo\Entity\Media') {
             // Are we a font?
@@ -1526,6 +1750,59 @@ class User extends Base
         $this->getState()->hydrate([
             'httpStatus' => 204,
             'message' => sprintf(__('%s has seen the welcome tutorial'), $this->getUser()->userName)
+        ]);
+    }
+
+    /**
+     * Preferences Form
+     */
+    public function preferencesForm()
+    {
+        $this->getState()->template = 'user-form-preferences';
+    }
+
+    /**
+     * @SWG\Put(
+     *     path="/user/pref",
+     *     operationId="userPrefEditFromForm",
+     *     tags={"user"},
+     *     summary="Save User Preferences",
+     *     description="Save User preferences from the Preferences form.",
+     *     @SWG\Parameter(
+     *      name="navigationMenuPosition",
+     *      in="formData",
+     *      required=true,
+     *      type="string"
+     *   ),
+     *     @SWG\Parameter(
+     *      name="useLibraryDuration",
+     *      in="formData",
+     *      required=false,
+     *      type="integer"
+     *   ),
+     *     @SWG\Parameter(
+     *      name="showThumbnailColumn",
+     *      in="formData",
+     *      required=false,
+     *      type="integer"
+     *   ),
+     *   @SWG\Response(
+     *      response=204,
+     *      description="successful operation"
+     *  )
+     * )
+     */
+    public function prefEditFromForm()
+    {
+        $this->getUser()->setOptionValue('navigationMenuPosition', $this->getSanitizer()->getString('navigationMenuPosition'));
+        $this->getUser()->setOptionValue('useLibraryDuration', $this->getSanitizer()->getCheckbox('useLibraryDuration'));
+        $this->getUser()->setOptionValue('showThumbnailColumn', $this->getSanitizer()->getCheckbox('showThumbnailColumn'));
+        $this->getUser()->save();
+
+        // Return
+        $this->getState()->hydrate([
+            'httpStatus' => 204,
+            'message' => __('Updated Preferences')
         ]);
     }
 }

@@ -1,110 +1,133 @@
 <?php
-/*
- * Spring Signage Ltd - http://www.springsignage.com
- * Copyright (C) 2015 Spring Signage Ltd
- * (AudioWidgetTest.php)
+/**
+ * Copyright (C) 2018 Xibo Signage Ltd
+ *
+ * Xibo - Digital Signage - http://www.xibo.org.uk
+ *
+ * This file is part of Xibo.
+ *
+ * Xibo is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * any later version.
+ *
+ * Xibo is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with Xibo.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 namespace Xibo\Tests\Integration\Widget;
 
 use Xibo\Helper\Random;
 use Xibo\OAuth2\Client\Entity\XiboImage;
-use Xibo\OAuth2\Client\Entity\XiboLayout;
 use Xibo\OAuth2\Client\Entity\XiboLibrary;
 use Xibo\OAuth2\Client\Entity\XiboPlaylist;
-use Xibo\OAuth2\Client\Entity\XiboRegion;
-use Xibo\OAuth2\Client\Entity\XiboAudio;
-use Xibo\OAuth2\Client\Entity\XiboWidget;
+use Xibo\Tests\Helper\LayoutHelperTrait;
 use Xibo\Tests\LocalWebTestCase;
 
+/**
+ * Class AudioWidgetTest
+ * @package Xibo\Tests\Integration\Widget
+ */
 class AudioWidgetTest extends LocalWebTestCase
 {
-	protected $startLayouts;
+    use LayoutHelperTrait;
+
+    /** @var \Xibo\OAuth2\Client\Entity\XiboLayout */
+    protected $publishedLayout;
+
+    /** @var XiboLibrary */
+    protected $media;
+
+    /** @var XiboLibrary */
+    protected $audio;
+
+    /** @var int */
+    protected $widgetId;
+
     /**
      * setUp - called before every test automatically
      */
     public function setup()
-    {  
+    {
         parent::setup();
-        $this->startLayouts = (new XiboLayout($this->getEntityProvider()))->get(['start' => 0, 'length' => 10000]);
-        $this->startMedias = (new XiboLibrary($this->getEntityProvider()))->get(['start' => 0, 'length' => 10000]);
+
+        $this->getLogger()->debug('Setup for ' . get_class() .' Test');
+
+        // Create a Layout
+        $this->publishedLayout = $this->createLayout();
+
+        // Checkout
+        $layout = $this->getDraft($this->publishedLayout);
+
+        // Create some media to upload
+        $this->media = (new XiboLibrary($this->getEntityProvider()))->create(Random::generateString(), PROJECT_ROOT . '/tests/resources/cc0_f1_gp_cars_pass_crash.mp3');
+        $this->audio = (new XiboLibrary($this->getEntityProvider()))->create(Random::generateString(), PROJECT_ROOT . '/tests/resources/cc0_f1_gp_cars_pass_crash.mp3');
+
+        // Assign the media we've created to our regions playlist.
+        $playlist = (new XiboPlaylist($this->getEntityProvider()))->assign([$this->media->mediaId], 10, $layout->regions[0]->regionPlaylist->playlistId);
+
+        // Store the widgetId
+        $this->widgetId = $playlist->widgets[0]->widgetId;
     }
+
     /**
      * tearDown - called after every test automatically
      */
     public function tearDown()
     {
-        // tearDown all layouts that weren't there initially
-        $finalLayouts = (new XiboLayout($this->getEntityProvider()))->get(['start' => 0, 'length' => 10000]);
-        # Loop over any remaining layouts and nuke them
-        foreach ($finalLayouts as $layout) {
-            /** @var XiboLayout $layout */
-            $flag = true;
-            foreach ($this->startLayouts as $startLayout) {
-               if ($startLayout->layoutId == $layout->layoutId) {
-                   $flag = false;
-               }
-            }
-            if ($flag) {
-                try {
-                    $layout->delete();
-                } catch (\Exception $e) {
-                    fwrite(STDERR, 'Unable to delete ' . $layout->layoutId . '. E:' . $e->getMessage());
-                }
-            }
-        }
-        // tearDown all media files that weren't there initially
-        $finalMedias = (new XiboLibrary($this->getEntityProvider()))->get(['start' => 0, 'length' => 10000]);
-        # Loop over any remaining media files and nuke them
-        foreach ($finalMedias as $media) {
-            /** @var XiboLibrary $media */
-            $flag = true;
-            foreach ($this->startMedias as $startMedia) {
-               if ($startMedia->mediaId == $media->mediaId) {
-                   $flag = false;
-               }
-            }
-            if ($flag) {
-                try {
-                    $media->deleteAssigned();
-                } catch (\Exception $e) {
-                    fwrite(STDERR, 'Unable to delete ' . $media->mediaId . '. E:' . $e->getMessage());
-                }
-            }
-        }
+        // Delete the Layout we've been working with
+        $this->deleteLayout($this->publishedLayout);
+
+        // Tidy up the media
+        $this->media->delete();
+        $this->audio->delete();
+
         parent::tearDown();
+
+        $this->getLogger()->debug('Tear down for ' . get_class() .' Test');
     }
 
+    /**
+     * @throws \Xibo\OAuth2\Client\Exception\XiboApiException
+     */
     public function testEdit()
     {
-        # Create layout 
-        $layout = (new XiboLayout($this->getEntityProvider()))->create('Audio edit Layout', 'phpunit description', '', 9);
-        # Add region to our layout
-        $region = (new XiboRegion($this->getEntityProvider()))->create($layout->layoutId, 1000,1000,200,200);
-        # Upload new media
-        $media = (new XiboLibrary($this->getEntityProvider()))->create('API audio', PROJECT_ROOT . '/tests/resources/cc0_f1_gp_cars_pass_crash.mp3');
-        # Assign media to a playlist
-        $playlist = (new XiboPlaylist($this->getEntityProvider()))->assign([$media->mediaId], null, $region->playlists[0]['playlistId']);
-        $name = 'Edited Name';
+        $this->getLogger()->debug('testEdit ' . get_class() .' Test');
+
+        // Now try to edit our assigned Media Item.
+        $name = 'Edited Name ' . Random::generateString(5);
         $duration = 80;
         $useDuration = 1;
         $mute = 0;
         $loop = 0;
-        $widget = $playlist->widgets[0];
-        $response = $this->client->put('/playlist/widget/' . $widget->widgetId, [
+
+        $this->client->put('/playlist/widget/' . $this->widgetId, [
             'name' => $name,
             'duration' => $duration,
             'useDuration' => $useDuration,
             'mute' => $mute,
             'loop' => $loop,
-            ], ['CONTENT_TYPE' => 'application/x-www-form-urlencoded']);
+            ], ['CONTENT_TYPE' => 'application/x-www-form-urlencoded']
+        );
+
         $this->assertSame(200, $this->client->response->status());
         $this->assertNotEmpty($this->client->response->body());
         $object = json_decode($this->client->response->body());
+
         $this->assertObjectHasAttribute('data', $object, $this->client->response->body());
-        $widgetOptions = (new XiboAudio($this->getEntityProvider()))->getById($region->playlists[0]['playlistId']);
+
+        /** @var XiboImage $widgetOptions */
+        $response = $this->getEntityProvider()->get('/playlist/widget', ['widgetId' => $this->widgetId]);
+        $widgetOptions = (new XiboImage($this->getEntityProvider()))->hydrate($response[0]);
+
         $this->assertSame($name, $widgetOptions->name);
         $this->assertSame($duration, $widgetOptions->duration);
+
         foreach ($widgetOptions->widgetOptions as $option) {
             if ($option['option'] == 'mute') {
                 $this->assertSame($mute, intval($option['value']));
@@ -116,55 +139,44 @@ class AudioWidgetTest extends LocalWebTestCase
                 $this->assertSame($useDuration, intval($option['value']));
             }
         }
+
+        $this->getLogger()->debug('testEdit finished');
     }
 
-    public function testDelete()
+    /**
+     * Test to edit and assign an auto item to a widget
+     */
+    public function testAssign()
     {
-        # Create layout 
-        $layout = (new XiboLayout($this->getEntityProvider()))->create('Audio edit Layout', 'phpunit description', '', 9);
-        # Add region to our layout
-        $region = (new XiboRegion($this->getEntityProvider()))->create($layout->layoutId, 1000,1000,200,200);
-        # Upload new media
-        $media = (new XiboLibrary($this->getEntityProvider()))->create('API Audio', PROJECT_ROOT . '/tests/resources/cc0_f1_gp_cars_pass_crash.mp3');
-        # Assign media to a playlist
-        $playlist = (new XiboPlaylist($this->getEntityProvider()))->assign([$media->mediaId], null, $region->playlists[0]['playlistId']);
-        $widget = $playlist->widgets[0];
-        # Delete it
-        $this->client->delete('/playlist/widget/' . $widget->widgetId);
-        $response = json_decode($this->client->response->body());
-        $this->assertSame(200, $response->status, $this->client->response->body());
-    }
+        $this->getLogger()->debug('testAssign');
 
-    public function testEditAssign()
-    {
-        # Create layout 
-        $layout = (new XiboLayout($this->getEntityProvider()))->create('Audio Assign Layout', 'phpunit description', '', 9);
-        # Add region to our layout
-        $region = (new XiboRegion($this->getEntityProvider()))->create($layout->layoutId, 1000,1000,200,200);
-        # Upload new medias
-        $mediaImg = (new XiboLibrary($this->getEntityProvider()))->create('API image', PROJECT_ROOT . '/tests/resources/xts-night-001.jpg');
-        $mediaAud = (new XiboLibrary($this->getEntityProvider()))->create('API audio', PROJECT_ROOT . '/tests/resources/cc0_f1_gp_cars_pass_crash.mp3');
-        # Assign image media to a playlist
-        $playlist = (new XiboPlaylist($this->getEntityProvider()))->assign([$mediaImg->mediaId], null, $region->playlists[0]['playlistId']);
-        $widget = $playlist->widgets[0];
         $volume = 80;
         $loop = 1;
-        # Add audio to image assigned to a playlist
-        $response = $this->client->put('/playlist/widget/' . $widget->widgetId . '/audio', [
-            'mediaId' => $mediaAud->mediaId,
+
+        // Add audio to image assigned to a playlist
+        $this->client->put('/playlist/widget/' . $this->widgetId . '/audio', [
+            'mediaId' => $this->audio->mediaId,
             'volume' => $volume,
             'loop' => $loop,
-            ], ['CONTENT_TYPE' => 'application/x-www-form-urlencoded']);
+            ], ['CONTENT_TYPE' => 'application/x-www-form-urlencoded']
+        );
+
         $this->assertSame(200, $this->client->response->status());
         $this->assertNotEmpty($this->client->response->body());
         $object = json_decode($this->client->response->body());
         $this->assertObjectHasAttribute('data', $object, $this->client->response->body());
-        $widgetOptions = (new XiboImage($this->getEntityProvider()))->getById($region->playlists[0]['playlistId']);
-        $this->assertSame('API image', $widgetOptions->name);
-        $this->assertSame(10, $widgetOptions->duration);
-        $this->assertSame($mediaImg->mediaId, intval($widgetOptions->mediaIds[0]));
-        $this->assertSame($mediaAud->mediaId, intval($widgetOptions->mediaIds[1]));
+
+        $response = $this->getEntityProvider()->get('/playlist/widget', ['widgetId' => $this->widgetId]);
+
+        /** @var XiboImage $widgetOptions */
+        $widgetOptions = (new XiboImage($this->getEntityProvider()))->hydrate($response[0]);
+
+        $this->assertSame($this->media->name, $widgetOptions->name);
+        $this->assertSame($this->media->mediaId, intval($widgetOptions->mediaIds[0]));
+        $this->assertSame($this->audio->mediaId, intval($widgetOptions->mediaIds[1]));
         $this->assertSame($volume, intval($widgetOptions->audio[0]['volume']));
         $this->assertSame($loop, intval($widgetOptions->audio[0]['loop']));
+
+        $this->getLogger()->debug('testAssign finished');
     }
 }

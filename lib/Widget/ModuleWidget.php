@@ -45,6 +45,8 @@ use Xibo\Factory\LayoutFactory;
 use Xibo\Factory\MediaFactory;
 use Xibo\Factory\ModuleFactory;
 use Xibo\Factory\PermissionFactory;
+use Xibo\Factory\PlayerVersionFactory;
+use Xibo\Factory\PlaylistFactory;
 use Xibo\Factory\ScheduleFactory;
 use Xibo\Factory\TransitionFactory;
 use Xibo\Factory\UserGroupFactory;
@@ -63,6 +65,10 @@ use Xibo\Storage\StorageServiceInterface;
  */
 abstract class ModuleWidget implements ModuleInterface
 {
+    protected static $STATUS_INVALID = 0;
+    protected static $STATUS_VALID = 1;
+    protected static $STATUS_PLAYER = 2;
+
     /**
      * @var Slim
      */
@@ -191,7 +197,13 @@ abstract class ModuleWidget implements ModuleInterface
     /** @var  UserGroupFactory */
     protected $userGroupFactory;
 
-    //</editor-fold>
+    /** @var PlayerVersionFactory */
+    protected $playerVersionFactory;
+
+    /** @var PlaylistFactory */
+    protected $playlistFactory;
+
+    // </editor-fold>
 
     /**
      * ModuleWidget constructor.
@@ -213,8 +225,9 @@ abstract class ModuleWidget implements ModuleInterface
      * @param ScheduleFactory $scheduleFactory
      * @param PermissionFactory $permissionFactory
      * @param UserGroupFactory $userGroupFactory
+     * @param PlaylistFactory $playlistFactory
      */
-    public function __construct($app, $store, $pool, $log, $config, $date, $sanitizer, $dispatcher, $moduleFactory, $mediaFactory, $dataSetFactory, $dataSetColumnFactory, $transitionFactory, $displayFactory, $commandFactory, $scheduleFactory, $permissionFactory, $userGroupFactory)
+    public function __construct($app, $store, $pool, $log, $config, $date, $sanitizer, $dispatcher, $moduleFactory, $mediaFactory, $dataSetFactory, $dataSetColumnFactory, $transitionFactory, $displayFactory, $commandFactory, $scheduleFactory, $permissionFactory, $userGroupFactory, $playlistFactory)
     {
         $this->app = $app;
         $this->store = $store;
@@ -235,6 +248,7 @@ abstract class ModuleWidget implements ModuleInterface
         $this->scheduleFactory = $scheduleFactory;
         $this->permissionFactory = $permissionFactory;
         $this->userGroupFactory = $userGroupFactory;
+        $this->playlistFactory = $playlistFactory;
 
         $this->init();
     }
@@ -421,6 +435,11 @@ abstract class ModuleWidget implements ModuleInterface
      */
     final protected function setDuration($duration)
     {
+        // Check if duration has a positive value
+        if ($duration < 0) {
+            throw new InvalidArgumentException(__('Duration needs to be a positive value'), 'duration');
+        }
+
         $this->widget->duration = $duration;
     }
 
@@ -431,6 +450,14 @@ abstract class ModuleWidget implements ModuleInterface
     final protected function setUseDuration($useDuration)
     {
         $this->widget->useDuration = $useDuration;
+    }
+
+    /**
+     * @return \Xibo\Entity\Playlist[]
+     */
+    final public function getAssignablePlaylists()
+    {
+        return $this->playlistFactory->query(null, ['regionSpecific' => 0, 'notPlaylistId' => $this->widget->playlistId]);
     }
 
     /**
@@ -671,35 +698,23 @@ abstract class ModuleWidget implements ModuleInterface
             $this->dispatcher->dispatch($this->saveEvent->getName(), $this->saveEvent);
         }
 
-        $this->widget->save();
+        $this->widget->calculateDuration($this)->save();
     }
 
-    /**
-     * Add Media
-     */
-    public function add()
+    /** @inheritdoc */
+    final public function add()
     {
-        // Nothing to do
+        // Set the default widget options for this widget and save.
+        $this->setDefaultWidgetOptions();
+        $this->setOption('upperLimit', 0);
+        $this->setOption('lowerLimit', 0);
+        $this->saveWidget();
     }
 
-    /**
-     * Edit Media
-     */
-    public function edit()
+    /** @inheritdoc */
+    public function delete()
     {
-        $this->setDuration($this->getSanitizer()->getInt('duration', $this->getDuration()));
-        $this->setUseDuration($this->getSanitizer()->getCheckbox('useDuration'));
-        $this->setOption('name', $this->getSanitizer()->getString('name'));
-
-        $this->widget->save();
-    }
-
-    /**
-     * Delete Widget
-     */
-    public final function delete()
-    {
-        $cachePath = $this->getConfig()->GetSetting('LIBRARY_LOCATION')
+        $cachePath = $this->getConfig()->getSetting('LIBRARY_LOCATION')
             . 'widget'
             . DIRECTORY_SEPARATOR
             . $this->getWidgetId()
@@ -765,7 +780,7 @@ abstract class ModuleWidget implements ModuleInterface
      */
     public function previewIcon()
     {
-        return '<div style="text-align:center;"><img alt="' . $this->getModuleType() . ' thumbnail" src="' . $this->getConfig()->uri('img/' . $this->getModule()->imageUri) . '" /></div>';
+        return '<div style="text-align:center;"><i alt="' . __($this->module->name) . ' thumbnail" class="fa module-preview-icon module-icon-' . __($this->module->type) . '"></i></div>';
     }
 
     /**
@@ -782,29 +797,7 @@ abstract class ModuleWidget implements ModuleInterface
 
         $url = $this->getApp()->urlFor('module.getResource', ['regionId' => $this->region->regionId, 'id' => $this->getWidgetId()]);
 
-        return '<iframe scrolling="no" src="' . $url . '?raw=true&preview=true&scale_override=' . $scaleOverride . '&width=' . $width . '&height=' . $height . '" width="' . $widthPx . '" height="' . $heightPx . '" style="border:0;"></iframe>';
-    }
-
-    /**
-     * Default code for the hover preview
-     * @return string
-     */
-    public function hoverPreview()
-    {
-        // Default Hover window contains a thumbnail, media type and duration
-        $output = '<div class="well">';
-        $output .= '<div class="preview-module-image"><img alt="' . __($this->module->name) . ' thumbnail" src="' . $this->getConfig()->uri('img/' . $this->module->imageUri) . '" /></div>';
-        $output .= '<div class="info">';
-        $output .= '    <ul>';
-        $output .= '    <li>' . __('Type') . ': ' . $this->module->name . '</li>';
-        $output .= '    <li>' . __('Name') . ': ' . $this->getName() . '</li>';
-        if ($this->getUseDuration() == 1)
-            $output .= '    <li>' . __('Duration') . ': ' . $this->widget->duration . ' ' . __('seconds') . '</li>';
-        $output .= '    </ul>';
-        $output .= '</div>';
-        $output .= '</div>';
-
-        return $output;
+        return '<iframe scrolling="no" src="' . $url . '?raw=true&preview=true" width="' . $widthPx . '" height="' . $heightPx . '" style="border:0;"></iframe>';
     }
 
     /**
@@ -951,7 +944,7 @@ abstract class ModuleWidget implements ModuleInterface
      */
     public function installModule()
     {
-        $this->getLog()->notice('Request to install module with name: ' . $this->module->name, 'module', 'InstallModule');
+        $this->getLog()->notice('Request to install module with name: ' . $this->module->name);
 
         // Validate some things.
         if ($this->module->type == '')
@@ -1005,14 +998,6 @@ abstract class ModuleWidget implements ModuleInterface
     public function configureRoutes()
     {
 
-    }
-
-    /**
-     * Default view for add form
-     */
-    public function addForm()
-    {
-        return $this->getModuleType() . '-form-add';
     }
 
     /**
@@ -1074,14 +1059,14 @@ abstract class ModuleWidget implements ModuleInterface
     public function getMedia()
     {
         $media = $this->mediaFactory->getById($this->getMediaId());
-        $media->setChildObjectDependencies($this->layoutFactory, $this->widgetFactory, $this->displayGroupFactory, $this->displayFactory, $this->scheduleFactory);
+        $media->setChildObjectDependencies($this->layoutFactory, $this->widgetFactory, $this->displayGroupFactory, $this->displayFactory, $this->scheduleFactory, $this->playerVersionFactory);
         return $media;
     }
 
     /**
      * Return File
      */
-    protected function download()
+    protected function download($attachment = null)
     {
         $media = $this->mediaFactory->getById($this->getMediaId());
 
@@ -1091,11 +1076,14 @@ abstract class ModuleWidget implements ModuleInterface
         $isPreview = ($this->getSanitizer()->getCheckbox('preview') == 1);
 
         // The file path
-        $libraryPath = $this->getConfig()->GetSetting('LIBRARY_LOCATION') . $media->storedAs;
+        $libraryPath = $this->getConfig()->getSetting('LIBRARY_LOCATION') . $media->storedAs;
+
+        // size
+        $size = filesize($libraryPath);
 
         // Set the content length
         $headers = $this->getApp()->response()->headers();
-        $headers->set('Content-Length', filesize($libraryPath));
+        $headers->set('Content-Length', $size);
 
         // Different behaviour depending on whether we are a preview or not.
         if ($isPreview) {
@@ -1106,7 +1094,7 @@ abstract class ModuleWidget implements ModuleInterface
         } else {
             // This widget is expected to output a file - usually this is for file based media
             // Get the name with library
-            $attachmentName = $this->getSanitizer()->getString('attachment', $media->storedAs);
+            $attachmentName = $this->getSanitizer()->getString('attachment', (($attachment == null) ? $media->storedAs : $attachment));
 
             // Issue some headers
             $this->getApp()->etag($media->md5);
@@ -1118,17 +1106,29 @@ abstract class ModuleWidget implements ModuleInterface
         }
 
         // Output the file
-        if ($this->getConfig()->GetSetting('SENDFILE_MODE') == 'Apache') {
+        if ($this->getConfig()->getSetting('SENDFILE_MODE') == 'Apache') {
             // Send via Apache X-Sendfile header?
             $headers->set('X-Sendfile', $libraryPath);
         }
-        else if ($this->getConfig()->GetSetting('SENDFILE_MODE') == 'Nginx') {
+        else if ($this->getConfig()->getSetting('SENDFILE_MODE') == 'Nginx') {
             // Send via Nginx X-Accel-Redirect?
             $headers->set('X-Accel-Redirect', '/download/' . $media->storedAs);
         }
         else {
             // Return the file with PHP
+            ob_end_flush();
+
+            // add the php headers
+            // https://github.com/xibosignage/xibo/issues/1992
+            if (!$isPreview) {
+                header('Content-Type: application/octet-stream');
+                header("Content-Transfer-Encoding: Binary");
+                header('Content-disposition: attachment; filename="' . $attachmentName . '"');
+                header('Content-Length: ' . $size);
+            }
+
             readfile($libraryPath);
+            exit;
         }
     }
 
@@ -1284,7 +1284,8 @@ abstract class ModuleWidget implements ModuleInterface
      * @param Media $media
      * @param string $filePath
      */
-    public function preProcess($media, $filePath) {
+    public function preProcess($media, $filePath)
+    {
 
     }
 
@@ -1305,15 +1306,9 @@ abstract class ModuleWidget implements ModuleInterface
     {
         $this->getLog()->debug('Default Widget Options: Setting use duration to 0');
         $this->setUseDuration(0);
-    }
+        $this->setOption('enableStat', $this->getConfig()->getSetting('WIDGET_STATS_ENABLED_DEFAULT'));
 
-    /**
-     * Get Status Message
-     * @return string
-     */
-    public function getStatusMessage()
-    {
-        return $this->statusMessage;
+        $this->setDuration($this->module->defaultDuration);
     }
 
     //<editor-fold desc="Get Resource and cache">
@@ -1330,6 +1325,13 @@ abstract class ModuleWidget implements ModuleInterface
     {
         // Default is the widgetId
         return $this->getWidgetId() . (($displayId === 0) ? '_0' : '');
+    }
+
+    /** @inheritdoc */
+    public function isCacheDisplaySpecific()
+    {
+        // the default cacheKey is the widgetId only, so the default answer here is false
+        return false;
     }
 
     /** @inheritdoc */
@@ -1385,7 +1387,7 @@ abstract class ModuleWidget implements ModuleInterface
         $modifiedDt = $this->getModifiedDate($displayId);
         $cachedDt = $this->getCacheDate($displayId);
         $cacheDuration = $this->getCacheDuration();
-        $cachePath = $this->getConfig()->GetSetting('LIBRARY_LOCATION')
+        $cachePath = $this->getConfig()->getSetting('LIBRARY_LOCATION')
             . 'widget'
             . DIRECTORY_SEPARATOR
             . $this->getWidgetId()
@@ -1393,13 +1395,12 @@ abstract class ModuleWidget implements ModuleInterface
 
         $cacheKey = $this->getCacheKey($displayId);
 
-        // If we are a non-preview, then we'd expect to be provided with a region.
-        // we use this to save a width/height aware version of this
-        if ($displayId !== 0) {
-            $cacheFile = $cacheKey . '_' . $this->region->width . '_' . $this->region->height;
-        } else {
-            $cacheFile = $cacheKey;
-        }
+        // Prefix whatever cacheKey the Module generates with the Region dimensions.
+        // Widgets may or may not appear in the same Region each time they are previewed due to them potentially
+        // being contained in a Playlist.
+        // Equally a Region might be resized, which would also effect the way the Widget looks. Just moving a Region
+        // location wouldn't though, which is why we base this on the width/height.
+        $cacheFile = $cacheKey . '_' . $this->region->width . '_' . $this->region->height;
 
         $this->getLog()->debug('Cache details - modifiedDt: ' . $modifiedDt->format('Y-m-d H:i:s')
             . ', cacheDt: ' . $cachedDt->format('Y-m-d H:i:s')
@@ -1407,12 +1408,16 @@ abstract class ModuleWidget implements ModuleInterface
             . ', cacheKey: ' . $cacheKey
             . ', cacheFile: ' . $cacheFile);
 
-        if (!file_exists($cachePath))
+        if (!file_exists($cachePath)) {
             mkdir($cachePath, 0777, true);
+        }
+
+        $cacheFileExists = file_exists($cachePath . $cacheFile);
 
         if ( $modifiedDt->greaterThan($cachedDt)
                 || $cachedDt->addSeconds($cacheDuration)->lessThan($now)
-                || !file_exists($cachePath . $cacheFile) ) {
+                || !$cacheFileExists
+                || ($cacheFileExists && !file_get_contents($cachePath . $cacheFile)) ) {
 
             $this->getLog()->debug('We will need to regenerate');
 
@@ -1501,22 +1506,6 @@ abstract class ModuleWidget implements ModuleInterface
             $this->getLog()->debug('No need to regenerate, cached until ' . $this->getDate()->getLocalDate($cachedDt->addSeconds($cacheDuration)));
 
             $resource = file_get_contents($cachePath . $cacheFile);
-        }
-
-        // If we are the preview, then we should look at updating the preview width, height and scale_override with
-        // the ones we've been given
-        // this is a workaround to making the cache key aware of the below parameters, which would create a new cache
-        // file each and every time the region changed size.
-        if ($displayId == 0) {
-            // Support keyword replacement and parsing for known combinations of these in existing widgets
-            // (for backwards compatibility)
-            $previewWidth = $this->getSanitizer()->getDouble('width', 0);
-            $previewHeight = $this->getSanitizer()->getDouble('height', 0);
-            $scaleOverride = $this->getSanitizer()->getDouble('scale_override', 0);
-
-            $resource = preg_replace('/"previewWidth":([-+]?[0-9]*\.?[0-9]+)/', '"previewWidth":' . $previewWidth, $resource);
-            $resource = preg_replace('/"previewHeight":([-+]?[0-9]*\.?[0-9]+)/', '"previewHeight":' . $previewHeight, $resource);
-            $resource = preg_replace('/"scaleOverride":([-+]?[0-9]*\.?[0-9]+)/', '"scaleOverride":' . $scaleOverride, $resource);
         }
 
         // Return the resource

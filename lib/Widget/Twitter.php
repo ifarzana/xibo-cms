@@ -63,7 +63,6 @@ class Twitter extends TwitterBase
             $module->type = 'twitter';
             $module->class = 'Xibo\Widget\Twitter';
             $module->description = 'Twitter Search Module';
-            $module->imageUri = 'forms/library.gif';
             $module->enabled = 1;
             $module->previewEnabled = 1;
             $module->assignable = 1;
@@ -72,6 +71,7 @@ class Twitter extends TwitterBase
             $module->schemaVersion = $this->codeSchemaVersion;
             $module->defaultDuration = 60;
             $module->settings = [];
+            $module->installName = 'twitter';
 
             $this->setModule($module);
             $this->installModule();
@@ -111,6 +111,14 @@ class Twitter extends TwitterBase
             $this->getLog()->error('Unable to delete old SVG reference during Twitter install. E = ' . $xiboException->getMessage());
             $this->getLog()->debug($xiboException->getTraceAsString());
         }
+    }
+
+    /**
+     * Javascript functions for the layout designer
+     */
+    public function layoutDesignerJavaScript()
+    {
+        return 'twitter-designer-javascript';
     }
 
     /**
@@ -156,31 +164,19 @@ class Twitter extends TwitterBase
         return $this->module->settings;
     }
 
-    public function validate()
-    {
-        // If overrideTemplate is false we have to define a template Id 
-        if($this->getOption('overrideTemplate') == 0 && ( $this->getOption('templateId') == '' || $this->getOption('templateId') == null) )
-            throw new \InvalidArgumentException(__('Please choose a template'));
-            
-        if ($this->getUseDuration() == 1 && $this->getDuration() == 0)
-            throw new \InvalidArgumentException(__('Please enter a duration'));
-
-        if (!v::stringType()->notEmpty()->validate($this->getOption('searchTerm')))
-            throw new \InvalidArgumentException(__('Please enter a search term'));
-    }
-
     /**
-     * Adds a Twitter Widget
-     * @SWG\Post(
-     *  path="/playlist/widget/twitter/{playlistId}",
-     *  operationId="WidgetTwitterAdd",
+     * Edit Widget
+     *
+     * @SWG\Put(
+     *  path="/playlist/widget/{widgetId}?twitter",
+     *  operationId="WidgetTwitterEdit",
      *  tags={"widget"},
-     *  summary="Add a Twitter Widget",
-     *  description="Add a new Twitter Widget to the specified playlist",
+     *  summary="Edit a Twitter Widget",
+     *  description="Edit a Twitter Widget. This call will replace existing Widget object, all not supplied parameters will be set to default.",
      *  @SWG\Parameter(
-     *      name="playlistId",
+     *      name="widgetId",
      *      in="path",
-     *      description="The playlist ID to add a Twitter widget",
+     *      description="The WidgetId to Edit",
      *      type="integer",
      *      required=true
      *   ),
@@ -205,6 +201,13 @@ class Twitter extends TwitterBase
      *      type="integer",
      *      required=false
      *  ),
+     *  @SWG\Parameter(
+     *      name="enableStat",
+     *      in="formData",
+     *      description="The option (On, Off, Inherit) to enable the collection of Widget Proof of Play statistics",
+     *      type="string",
+     *      required=false
+     *   ),
      *  @SWG\Parameter(
      *      name="searchTerm",
      *      in="formData",
@@ -267,7 +270,7 @@ class Twitter extends TwitterBase
      *      description="Distance in miles that the tweets should be returned from. Set 0 for no restrictions",
      *      type="integer",
      *      required=false
-     *   ),   
+     *   ),
      *  @SWG\Parameter(
      *      name="tweetCount",
      *      in="formData",
@@ -281,21 +284,21 @@ class Twitter extends TwitterBase
      *      description="Flag (0, 1) Should the URLs be removed from the tweet text?",
      *      type="integer",
      *      required=false
-     *   ),      
+     *   ),
      *  @SWG\Parameter(
      *      name="removeMentions",
      *      in="formData",
      *      description="Flag (0, 1) Should mentions (@someone) be removed from the tweet text?",
      *      type="integer",
      *      required=false
-     *   ),      
+     *   ),
      *  @SWG\Parameter(
      *      name="removeHashtags",
      *      in="formData",
      *      description="Flag (0, 1) Should the hashtags (#something) be removed from the tweet text",
      *      type="integer",
      *      required=false
-     *   ),             
+     *   ),
      *  @SWG\Parameter(
      *      name="updateInterval",
      *      in="formData",
@@ -367,6 +370,13 @@ class Twitter extends TwitterBase
      *      required=false
      *   ),
      *  @SWG\Parameter(
+     *      name="ta_text_advanced",
+     *      in="formData",
+     *      description="A flag (0, 1), Should text area by presented as a visual editor?",
+     *      type="integer",
+     *      required=false
+     *   ),
+     *  @SWG\Parameter(
      *      name="styleSheet",
      *      in="formData",
      *      description="Optional StyleSheet Pass only with overrideTemplate set to 1 ",
@@ -381,46 +391,19 @@ class Twitter extends TwitterBase
      *      required=false
      *   ),
      *  @SWG\Response(
-     *      response=201,
-     *      description="successful operation",
-     *      @SWG\Schema(ref="#/definitions/Widget"),
-     *      @SWG\Header(
-     *          header="Location",
-     *          description="Location of the new widget",
-     *          type="string"
-     *      )
+     *      response=204,
+     *      description="successful operation"
      *  )
      * )
-     */
-    public function add()
-    {
-        $this->setCommonOptions();
-
-        // Save the widget
-        $this->validate();
-        $this->saveWidget();
-    }
-
-    /**
-     * Edit Media
+     *
+     * @throws \Xibo\Exception\XiboException
      */
     public function edit()
-    {
-        $this->setCommonOptions();
-
-        // Save the widget
-        $this->validate();
-        $this->saveWidget();
-    }
-
-    /**
-     * Set common options from Request Params
-     */
-    private function setCommonOptions()
     {
         $this->setDuration($this->getSanitizer()->getInt('duration', $this->getDuration()));
         $this->setUseDuration($this->getSanitizer()->getCheckbox('useDuration'));
         $this->setOption('name', $this->getSanitizer()->getString('name'));
+        $this->setOption('enableStat', $this->getSanitizer()->getString('enableStat'));
         $this->setOption('searchTerm', $this->getSanitizer()->getString('searchTerm'));
         $this->setOption('language', $this->getSanitizer()->getString('language'));
         $this->setOption('effect', $this->getSanitizer()->getString('effect'));
@@ -438,26 +421,30 @@ class Twitter extends TwitterBase
         $this->setOption('updateInterval', $this->getSanitizer()->getInt('updateInterval', 60));
         $this->setOption('templateId', $this->getSanitizer()->getString('templateId'));
         $this->setOption('durationIsPerItem', $this->getSanitizer()->getCheckbox('durationIsPerItem'));
-        $this->setOption('itemsPerPage', $this->getSanitizer()->getInt('itemsPerPage'), 5);
+        $this->setOption('itemsPerPage', $this->getSanitizer()->getInt('itemsPerPage', 5));
         $this->setRawNode('javaScript', $this->getSanitizer()->getParam('javaScript', ''));
 
-        if( $this->getOption('overrideTemplate') == 1 ){
+        if ($this->getOption('overrideTemplate') == 1) {
             $this->setRawNode('template', $this->getSanitizer()->getParam('ta_text', $this->getSanitizer()->getParam('template', null)));
+            $this->setOption('ta_text_advanced', $this->getSanitizer()->getCheckbox('ta_text_advanced'));
             $this->setRawNode('styleSheet', $this->getSanitizer()->getParam('ta_css', $this->getSanitizer()->getParam('styleSheet', null)));
             $this->setOption('resultContent', $this->getSanitizer()->getString('resultContent'));
-                
+
             $this->setOption('widgetOriginalPadding', $this->getSanitizer()->getInt('widgetOriginalPadding'));
             $this->setOption('widgetOriginalWidth', $this->getSanitizer()->getInt('widgetOriginalWidth'));
             $this->setOption('widgetOriginalHeight', $this->getSanitizer()->getInt('widgetOriginalHeight'));
         }
-        
+
+        // Save the widget
+        $this->isValid();
+        $this->saveWidget();
     }
 
     /**
      * @param int $displayId
      * @param bool $isPreview
      * @return array|false
-     * @throws XiboException
+     * @throws \Xibo\Exception\XiboException
      */
     protected function getTwitterFeed($displayId = 0, $isPreview = true)
     {
@@ -472,8 +459,8 @@ class Twitter extends TwitterBase
                 $defaultLat = $display->latitude;
                 $defaultLong = $display->longitude;
             } else {
-                $defaultLat = $this->getConfig()->GetSetting('DEFAULT_LAT');
-                $defaultLong = $this->getConfig()->GetSetting('DEFAULT_LONG');
+                $defaultLat = $this->getConfig()->getSetting('DEFAULT_LAT');
+                $defaultLong = $this->getConfig()->getSetting('DEFAULT_LONG');
             }
 
             // Built the geoCode string.
@@ -589,7 +576,7 @@ class Twitter extends TwitterBase
         $emoji->imagePathPNG = $this->getResourceUrl('emojione/emojione.sprites.png');
 
         // Get the date format to apply
-        $dateFormat = $this->getOption('dateFormat', $this->getConfig()->GetSetting('DATE_FORMAT'));
+        $dateFormat = $this->getOption('dateFormat', $this->getConfig()->getSetting('DATE_FORMAT'));
 
         // This should return the formatted items.
         foreach ($data->statuses as $tweet) {
@@ -799,9 +786,6 @@ class Twitter extends TwitterBase
             'numItems' => count($items),
             'originalWidth' => $this->region->width,
             'originalHeight' => $this->region->height,
-            'previewWidth' => $this->getSanitizer()->getDouble('width', 0),
-            'previewHeight' => $this->getSanitizer()->getDouble('height', 0),
-            'scaleOverride' => $this->getSanitizer()->getDouble('scale_override', 0),
             'widgetDesignPadding' => $widgetOriginalPadding,
             'widgetDesignWidth' => $widgetOriginalWidth,
             'widgetDesignHeight'=> $widgetOriginalHeight,
@@ -878,11 +862,17 @@ class Twitter extends TwitterBase
     /** @inheritdoc */
     public function isValid()
     {
-        // Using the information you have in your module calculate whether it is valid or not.
-        // 0 = Invalid
-        // 1 = Valid
-        // 2 = Unknown
-        return 1;
+        // If overrideTemplate is false we have to define a template Id
+        if ($this->getOption('overrideTemplate') == 0 && ( $this->getOption('templateId') == '' || $this->getOption('templateId') == null))
+            throw new InvalidArgumentException(__('Please choose a template'), 'templateId');
+
+        if ($this->getUseDuration() == 1 && $this->getDuration() == 0)
+            throw new InvalidArgumentException(__('Please enter a duration'), 'duration');
+
+        if (!v::stringType()->notEmpty()->validate($this->getOption('searchTerm')))
+            throw new InvalidArgumentException(__('Please enter a search term'), 'searchTerm');
+
+        return self::$STATUS_VALID;
     }
 
     /** @inheritdoc */
@@ -903,6 +893,12 @@ class Twitter extends TwitterBase
             // Non-display specific
             return $this->getWidgetId(). (($displayId === 0) ? '_0' : '');
         }
+    }
+
+    /** @inheritdoc */
+    public function isCacheDisplaySpecific()
+    {
+        return ($this->getOption('tweetDistance', 0) > 0);
     }
 
     /** @inheritdoc */

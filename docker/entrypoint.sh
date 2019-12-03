@@ -4,9 +4,10 @@ if [ "$CMS_DEV_MODE" == "true" ]
 then
   # Print MySQL connection details
   echo "MySQL Connection Details:"
-  echo "Username: cms"
+  echo "Username: $MYSQL_USER"
   echo "Password: $MYSQL_PASSWORD"
-  echo "Host: mysql"
+  echo "DB: $MYSQL_DATABASE"
+  echo "Host: $MYSQL_HOST"
   echo ""
   echo "XMR Connection Details:"
   echo "Host: $XMR_HOST"
@@ -28,6 +29,22 @@ fi
 # Safety sleep to give MySQL a moment to settle after coming up
 echo "MySQL started"
 sleep 1
+
+# Check to see if we have a settings.php file in this container
+# if we don't, then we will need to create one here (it only contains the $_SERVER environment
+# variables we've already set
+if [ ! -f "/var/www/cms/web/settings.php" ]
+then
+  # Write settings.php
+  echo "Updating settings.php"
+
+  # We won't have a settings.php in place, so we'll need to copy one in
+  cp /tmp/settings.php-template /var/www/cms/web/settings.php
+  chown apache.apache -R /var/www/cms/web/settings.php
+
+  SECRET_KEY=$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 8)
+  /bin/sed -i "s/define('SECRET_KEY','');/define('SECRET_KEY','$SECRET_KEY');/" /var/www/cms/web/settings.php
+fi
 
 # Check if there's a database file to import
 if [ -f "/var/www/backup/import.sql" ] && [ "$CMS_DEV_MODE" == "false" ]
@@ -52,12 +69,16 @@ then
   MAINTENANCE_KEY=$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 16)
   mysql -D $MYSQL_DATABASE -u $MYSQL_USER -p$MYSQL_PASSWORD -h $MYSQL_HOST -P $MYSQL_PORT -e "UPDATE \`setting\` SET \`value\`='$MAINTENANCE_KEY' WHERE \`setting\`='MAINTENANCE_KEY' LIMIT 1"
 
+  # Configure Quick Chart
+  echo "Setting up Quickchart"
+  mysql -D $MYSQL_DATABASE -u $MYSQL_USER -p$MYSQL_PASSWORD -h $MYSQL_HOST -P $MYSQL_PORT -e "UPDATE \`setting\` SET \`value\`='$CMS_QUICK_CHART_URL', userSee=0 WHERE \`setting\`='QUICK_CHART_URL' LIMIT 1"
+
   mv /var/www/backup/import.sql /var/www/backup/import.sql.done
 fi
 
 DB_EXISTS=0
 # Check if the database exists already
-if mysql -D $MYSQL_DATABASE -u $MYSQL_USER -p$MYSQL_PASSWORD -h $MYSQL_HOST -P $MYSQL_PORT -e "SELECT DBVersion from version"
+if mysql -D $MYSQL_DATABASE -u $MYSQL_USER -p$MYSQL_PASSWORD -h $MYSQL_HOST -P $MYSQL_PORT -e "SELECT settingId FROM \`setting\` LIMIT 1"
 then
   # Database exists.
   DB_EXISTS=1
@@ -69,10 +90,10 @@ fi
 if [ "$DB_EXISTS" == "1" ] && [ "$CMS_DEV_MODE" == "false" ]
 then
   echo "Existing Database, checking if we need to upgrade it"
-  # Get the currently installed schema version number
-  CURRENT_DB_VERSION=$(mysql -D $MYSQL_DATABASE -u $MYSQL_USER -p$MYSQL_PASSWORD -h $MYSQL_HOST -P $MYSQL_PORT -se 'SELECT DBVersion from version')
+  # Determine if there are any migrations to be run
+  /var/www/cms/vendor/bin/phinx status -c "/var/www/cms/phinx.php"
 
-  if [ ! "$CURRENT_DB_VERSION"  == "$CMS_DB_VERSION" ]
+  if [ ! "$?" == 0 ]
   then
     echo "We will upgrade it, take a backup"
 
@@ -81,6 +102,10 @@ then
 
     # Drop app cache on upgrade
     rm -rf /var/www/cms/cache/*
+
+    # Upgrade
+    echo 'Running database migrations'
+    /var/www/cms/vendor/bin/phinx migrate -c /var/www/cms/phinx.php
   fi
 fi
 
@@ -91,10 +116,12 @@ then
   echo "New install"
 
   echo "Provisioning Database"
+
+  # Create the database if it doesn't exist
+  mysql -u $MYSQL_USER -p$MYSQL_PASSWORD -h $MYSQL_HOST -P $MYSQL_PORT -e "CREATE DATABASE IF NOT EXISTS $MYSQL_DATABASE;"
+
   # Populate the database
-  mysql -D $MYSQL_DATABASE -u $MYSQL_USER -p$MYSQL_PASSWORD -h $MYSQL_HOST -P $MYSQL_PORT -e "SOURCE /var/www/cms/install/master/structure.sql"
-  mysql -D $MYSQL_DATABASE -u $MYSQL_USER -p$MYSQL_PASSWORD -h $MYSQL_HOST -P $MYSQL_PORT -e "SOURCE /var/www/cms/install/master/data.sql"
-  mysql -D $MYSQL_DATABASE -u $MYSQL_USER -p$MYSQL_PASSWORD -h $MYSQL_HOST -P $MYSQL_PORT -e "SOURCE /var/www/cms/install/master/constraints.sql"
+  php /var/www/cms/vendor/bin/phinx migrate -c "/var/www/cms/phinx.php"
 
   CMS_KEY=$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 8)
 
@@ -126,31 +153,20 @@ then
   mysql -D $MYSQL_DATABASE -u $MYSQL_USER -p$MYSQL_PASSWORD -h $MYSQL_HOST -P $MYSQL_PORT -e "UPDATE \`setting\` SET \`value\`='$MAINTENANCE_KEY' WHERE \`setting\`='MAINTENANCE_KEY' LIMIT 1"
 fi
 
-if [ -e /CMS-FLAG ]
-then
-  # Remove the CMS-FLAG so we don't run this block each time we're started
-  rm /CMS-FLAG
-
-  # Write settings.php
-  echo "Updating settings.php"
-
-  # We won't have a settings.php in place, so we'll need to copy one in
-  cp /tmp/settings.php-template /var/www/cms/web/settings.php
-  chown apache.apache -R /var/www/cms/web/settings.php
-
-  SECRET_KEY=$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 8)
-  /bin/sed -i "s/define('SECRET_KEY','');/define('SECRET_KEY','$SECRET_KEY');/" /var/www/cms/web/settings.php
-  
-  # Import any ca-certificate files that might be needed to use a proxy etc
-  echo "Importing ca-certs"
-  cp -v /var/www/cms/ca-certs/*.pem /usr/local/share/ca-certificates
-  cp -v /var/www/cms/ca-certs/*.crt /var/local/share/ca-certificates
-  /usr/sbin/update-ca-certificates
-fi
-
 if [ "$CMS_DEV_MODE" == "false" ]
 then
+    # Import any ca-certificate files that might be needed to use a proxy etc
+    echo "Importing ca-certs"
+    cp -v /var/www/cms/ca-certs/*.pem /usr/local/share/ca-certificates
+    cp -v /var/www/cms/ca-certs/*.crt /usr/local/share/ca-certificates
+    /usr/sbin/update-ca-certificates
+
+    # Configure Quick Chart
+    echo "Setting up Quickchart"
+    mysql -D $MYSQL_DATABASE -u $MYSQL_USER -p$MYSQL_PASSWORD -h $MYSQL_HOST -P $MYSQL_PORT -e "UPDATE \`setting\` SET \`value\`='$CMS_QUICK_CHART_URL', userSee=0 WHERE \`setting\`='QUICK_CHART_URL' LIMIT 1"
+
     # Update /etc/periodic/15min/cms-db-backup with current environment (for cron)
+    /bin/sed -i "s/^MYSQL_BACKUP_ENABLED=.*$/MYSQL_BACKUP_ENABLED=$MYSQL_BACKUP_ENABLED/" /etc/periodic/15min/cms-db-backup
     /bin/sed -i "s/^MYSQL_USER=.*$/MYSQL_USER=$MYSQL_USER/" /etc/periodic/15min/cms-db-backup
     /bin/sed -i "s/^MYSQL_PASSWORD=.*$/MYSQL_PASSWORD=$MYSQL_PASSWORD/" /etc/periodic/15min/cms-db-backup
     /bin/sed -i "s/^MYSQL_HOST=.*$/MYSQL_HOST=$MYSQL_HOST/" /etc/periodic/15min/cms-db-backup
@@ -195,7 +211,11 @@ then
     /bin/chmod g+s /usr/sbin/ssmtp
 
     mkdir -p /var/www/cms/library/temp
-    chown apache.apache -R /var/www/cms
+    chown apache.apache -R /var/www/cms/library
+    chown apache.apache -R /var/www/cms/custom
+    chown apache.apache -R /var/www/cms/web/theme/custom
+    chown apache.apache -R /var/www/cms/web/userscripts
+    chown apache.apache -R /var/www/cms/ca-certs
 
     # If we have a CMS ALIAS environment variable, then configure that in our Apache conf.
     # this must not be done in DEV mode, as it modifies the .htaccess file, which might then be committed by accident
@@ -226,9 +246,8 @@ sed -i "s/upload_max_filesize = .*$/upload_max_filesize = $CMS_PHP_UPLOAD_MAX_FI
 sed -i "s/max_execution_time = .*$/max_execution_time = $CMS_PHP_MAX_EXECUTION_TIME/" /etc/php7/php.ini
 sed -i "s/memory_limit = .*$/memory_limit = $CMS_PHP_MEMORY_LIMIT/" /etc/php7/php.ini
 
-echo "Running maintenance"
-cd /var/www/cms
-su -s /bin/bash -c 'cd /var/www/cms && /usr/bin/php bin/run.php 1' apache
+# Configure Apache TimeOut
+sed -i "s/\bTimeout\b .*$/Timeout $CMS_APACHE_TIMEOUT/" /etc/apache2/conf.d/default.conf
 
 # Run CRON in Production mode
 if [ "$CMS_DEV_MODE" == "false" ]

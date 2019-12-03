@@ -7,6 +7,7 @@
 
 namespace Xibo\Tests;
 
+use Monolog\Handler\NullHandler;
 use Monolog\Handler\StreamHandler;
 use Monolog\Logger;
 use Psr\Log\LoggerInterface;
@@ -83,11 +84,16 @@ class LocalWebTestCase extends WebTestCase
         ]);
 
         // Create a logger
+        $handlers = [];
+        if (isset($_SERVER['PHPUNIT_LOG_TO_FILE']) && $_SERVER['PHPUNIT_LOG_TO_FILE']) {
+            $handlers[] = new StreamHandler(PROJECT_ROOT . '/library/log.txt', Logger::DEBUG);
+        } else {
+            $handlers[] = new NullHandler();
+        }
+
         $logger = new AccessibleMonologWriter(array(
             'name' => 'PHPUNIT',
-            'handlers' => array(
-                new StreamHandler(PROJECT_ROOT . '/library/log.txt', Logger::DEBUG)
-            ),
+            'handlers' => $handlers,
             'processors' => array(
                 new \Xibo\Helper\LogProcessor(),
                 new \Monolog\Processor\UidProcessor(7)
@@ -168,12 +174,16 @@ class LocalWebTestCase extends WebTestCase
         // Provide the same config
         $container->configService = ConfigService::Load(PROJECT_ROOT . '/web/settings.php');
 
+        // Register the date service
+        $container->singleton('dateService', function() {
+            $date = new \Xibo\Service\DateServiceGregorian();
+            $date->setLocale(Translate::GetLocale(2));
+            return $date;
+        });
+        
         Storage::setStorage($container);
 
         $container->configService->setDependencies($container->store, '/');
-
-        // Define versions, etc.
-        $container->configService->Version();
 
         // Register the sanitizer
         $container->singleton('sanitizerService', function($container) {
@@ -277,6 +287,14 @@ class LocalWebTestCase extends WebTestCase
         self::$xmds = $xmds;
     }
 
+    public static function tearDownAfterClass()
+    {
+        // Remove the DB
+        self::$container->store->close();
+
+        parent::tearDownAfterClass();
+    }
+
     /**
      * Convenience function to skip a test with a reason and close output buffers nicely.
      * @param string $reason
@@ -302,8 +320,11 @@ class LocalWebTestCase extends WebTestCase
     {
         // Create if necessary
         if (self::$logger === null) {
-            //self::$logger = new Logger('TESTS', [new \Monolog\Handler\StreamHandler(STDERR, Logger::DEBUG)]);
-            self::$logger = new NullLogger();
+            if (isset($_SERVER['PHPUNIT_LOG_TO_CONSOLE']) && $_SERVER['PHPUNIT_LOG_TO_CONSOLE']) {
+                self::$logger = new Logger('TESTS', [new \Monolog\Handler\StreamHandler(STDERR, Logger::DEBUG)]);
+            } else {
+                self::$logger = new NullLogger();
+            }
         }
 
         return self::$logger;
@@ -320,5 +341,38 @@ class LocalWebTestCase extends WebTestCase
             $this->fail('Test hasnt used the client and therefore cannot determine XMR activity');
 
         return $service->processQueue();
+    }
+
+    protected static function installModuleIfNecessary($name, $class)
+    {
+        // Make sure the HLS widget is installed
+        $res = self::$container->store->select('SELECT * FROM `module` WHERE `module` = :module', ['module' => $name]);
+
+        if (count($res) <= 0) {
+            // Install the module
+            self::$container->store->insert('
+              INSERT INTO `module` (`Module`, `Name`, `Enabled`, `RegionSpecific`, `Description`,
+                 `SchemaVersion`, `ValidExtensions`, `PreviewEnabled`, `assignable`, `render_as`, `settings`, `viewPath`, `class`, `defaultDuration`, `installName`)
+              VALUES (:module, :name, :enabled, :region_specific, :description,
+                 :schema_version, :valid_extensions, :preview_enabled, :assignable, :render_as, :settings, :viewPath, :class, :defaultDuration, :installName)
+            ', [
+                'module' => $name,
+                'name' => $name,
+                'enabled' => 1,
+                'region_specific' => 1,
+                'description' => $name,
+                'schema_version' => 1,
+                'valid_extensions' => null,
+                'preview_enabled' => 1,
+                'assignable' => 1,
+                'render_as' => 'html',
+                'settings' => json_encode([]),
+                'viewPath' => '../modules',
+                'class' => $class,
+                'defaultDuration' => 10,
+                'installName' => $name
+            ]);
+            self::$container->store->commitIfNecessary();
+        }
     }
 }

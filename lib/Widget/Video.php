@@ -1,7 +1,7 @@
 <?php
 /*
  * Xibo - Digital Signage - http://www.xibo.org.uk
- * Copyright (C) 2006,2007,2008 Daniel Garner and James Packer
+ * Copyright (C) 2006-2018 Xibo Signage Ltd, Daniel Garner and James Packer
  *
  * This file is part of Xibo.
  *
@@ -23,17 +23,21 @@ namespace Xibo\Widget;
 
 class Video extends ModuleWidget
 {
-    /**
-     * Form for updating the module settings
-     */
+
+    /** @inheritdoc */
+    public function layoutDesignerJavaScript()
+    {
+        // We use the same javascript as the data set view designer
+        return 'video-designer-javascript';
+    }
+
+    /** @inheritdoc */
     public function settingsForm()
     {
         return 'video-form-settings';
     }
 
-    /**
-     * Process any module settings
-     */
+    /** @inheritdoc */
     public function settings()
     {
         // Process any module settings you asked for.
@@ -48,12 +52,20 @@ class Video extends ModuleWidget
 
     /**
      * Edit a Video Widget
-     * @SWG\Post(
+     * @SWG\Put(
      *  path="/playlist/widget/video/{playlistId}",
      *  operationId="WidgetVideoEdit",
      *  tags={"widget"},
      *  summary="Parameters for editing existing video on a layout",
-     *  description="Parameters for editing existing video on a layout, for adding new videos, please refer to POST /library documentation",
+     *  description="Parameters for editing existing video on a layout, for adding new videos, please refer to POST /library documentation.
+                    This call will replace existing Widget object, all not supplied parameters will be set to default.",
+     *  @SWG\Parameter(
+     *      name="playlistId",
+     *      in="path",
+     *      description="The Playlist ID",
+     *      type="integer",
+     *      required=true
+     *  ),
      *  @SWG\Parameter(
      *      name="name",
      *      in="formData",
@@ -96,6 +108,20 @@ class Video extends ModuleWidget
      *      type="integer",
      *      required=false
      *   ),
+     *  @SWG\Parameter(
+     *      name="enableStat",
+     *      in="formData",
+     *      description="The option (On, Off, Inherit) to enable the collection of Widget Proof of Play statistics",
+     *      type="string",
+     *      required=false
+     *   ),
+     *  @SWG\Parameter(
+     *      name="showFullScreen",
+     *      in="formData",
+     *      description="Edit only - Should the video expand over the top of existing content and show in full screen?",
+     *      type="integer",
+     *      required=false
+     *   ),
      *  @SWG\Response(
      *      response=201,
      *      description="successful operation",
@@ -107,6 +133,8 @@ class Video extends ModuleWidget
      *      )
      *  )
      * )
+     *
+     * @inheritdoc
      */
     public function edit()
     {
@@ -114,35 +142,29 @@ class Video extends ModuleWidget
         $this->setUseDuration($this->getSanitizer()->getCheckbox('useDuration'));
         $this->setDuration($this->getSanitizer()->getInt('duration', $this->getDuration()));
         $this->setOption('name', $this->getSanitizer()->getString('name'));
+        $this->setOption('enableStat', $this->getSanitizer()->getString('enableStat'));
         $this->setOption('scaleType', $this->getSanitizer()->getString('scaleTypeId', 'aspect'));
         $this->setOption('mute', $this->getSanitizer()->getCheckbox('mute'));
+        $this->setOption('showFullScreen', $this->getSanitizer()->getCheckbox('showFullScreen'));
 
         // Only loop if the duration is > 0
-        if ($this->getUseDuration() == 0 || $this->getDuration() == 0)
+        if ($this->getUseDuration() == 0 || $this->getDuration() == 0) {
+            $this->setDuration(0);
             $this->setOption('loop', 0);
-        else
+        } else {
             $this->setOption('loop', $this->getSanitizer()->getCheckbox('loop'));
-
+        }
+        
         $this->saveWidget();
     }
 
-    /**
-     * Override previewAsClient
-     * @param float $width
-     * @param float $height
-     * @param int $scaleOverride
-     * @return string
-     */
+    /** @inheritdoc */
     public function previewAsClient($width, $height, $scaleOverride = 0)
     {
         return $this->previewIcon();
     }
 
-    /**
-     * Determine duration
-     * @param $fileName
-     * @return int
-     */
+    /** @inheritdoc */
     public function determineDuration($fileName = null)
     {
         // If we don't have a file name, then we use the default duration of 0 (end-detect)
@@ -155,32 +177,22 @@ class Video extends ModuleWidget
         return intval($this->getSanitizer()->getDouble('playtime_seconds', 0, $file));
     }
 
-    /**
-     * Set default widget options
-     */
+    /** @inheritdoc */
     public function setDefaultWidgetOptions()
     {
         parent::setDefaultWidgetOptions();
         $this->setOption('mute', $this->getSetting('defaultMute', 0));
     }
 
-    /**
-     * Get Resource
-     * @param int $displayId
-     * @return mixed
-     */
+    /** @inheritdoc */
     public function getResource($displayId = 0)
     {
         $this->download();
     }
 
-    /**
-     * Is this module valid
-     * @return int
-     */
+    /** @inheritdoc */
     public function isValid()
     {
-        // Yes
-        return 1;
+        return self::$STATUS_VALID;
     }
 }

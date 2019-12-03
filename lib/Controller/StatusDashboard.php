@@ -132,8 +132,10 @@ class StatusDashboard extends Base
                   IFNULL(SUM(Size), 0) AS size
                 FROM `bandwidth`
                   INNER JOIN `lkdisplaydg`
-                  ON lkdisplaydg.displayid = bandwidth.displayId
-               WHERE month > :month ';
+                  ON lkdisplaydg.displayID = bandwidth.displayId
+                  INNER JOIN `displaygroup`
+                  ON displaygroup.DisplayGroupID = lkdisplaydg.DisplayGroupID
+               WHERE month > :month AND displaygroup.isDisplaySpecific = 1';
 
             $this->displayFactory->viewPermissionSql('Xibo\Entity\DisplayGroup', $sql, $params, '`lkdisplaydg`.displayGroupId');
 
@@ -143,7 +145,7 @@ class StatusDashboard extends Base
             $results = $this->store->select($sql, $params);
 
             // Monthly bandwidth - optionally tested against limits
-            $xmdsLimit = $this->getConfig()->GetSetting('MONTHLY_XMDS_TRANSFER_LIMIT_KB');
+            $xmdsLimit = $this->getConfig()->getSetting('MONTHLY_XMDS_TRANSFER_LIMIT_KB');
 
             $maxSize = 0;
             foreach ($results as $row) {
@@ -209,7 +211,7 @@ class StatusDashboard extends Base
                 $libraryLimit = $this->getUser()->libraryQuota * 1024;
             }
             else {
-                $libraryLimit = $this->getConfig()->GetSetting('LIBRARY_SIZE_LIMIT_KB') * 1024;
+                $libraryLimit = $this->getConfig()->getSetting('LIBRARY_SIZE_LIMIT_KB') * 1024;
             }
 
             // Library Size in Bytes
@@ -307,12 +309,12 @@ class StatusDashboard extends Base
             $data['nowShowing'] = $sth->fetchColumn(0);
 
             // Latest news
-            if ($this->getConfig()->GetSetting('DASHBOARD_LATEST_NEWS_ENABLED') == 1 && !empty($this->getConfig()->GetSetting('LATEST_NEWS_URL'))) {
+            if ($this->getConfig()->getSetting('DASHBOARD_LATEST_NEWS_ENABLED') == 1 && !empty($this->getConfig()->getSetting('LATEST_NEWS_URL'))) {
                 // Make sure we have the cache location configured
-                Library::ensureLibraryExists($this->getConfig()->GetSetting('LIBRARY_LOCATION'));
+                Library::ensureLibraryExists($this->getConfig()->getSetting('LIBRARY_LOCATION'));
 
                 try {
-                    $feedUrl = $this->getConfig()->GetSetting('LATEST_NEWS_URL');
+                    $feedUrl = $this->getConfig()->getSetting('LATEST_NEWS_URL');
                     $cache = $this->pool->getItem('rss/' . md5($feedUrl));
 
                     $latestNews = $cache->get();
@@ -374,10 +376,47 @@ class StatusDashboard extends Base
 
                     $data['latestNews'] = array(array('title' => __('Latest news not available.'), 'description' => '', 'link' => ''));
                 }
-            }
-            else {
+            } else {
                 $data['latestNews'] = array(array('title' => __('Latest news not enabled.'), 'description' => '', 'link' => ''));
             }
+
+            // Display Status and Media Inventory data - Level one
+            $displays = $this->displayFactory->query();
+            $displayIds = [];
+            $displayLoggedIn = [];
+            $displayNames = [];
+            $displayMediaStatus = [];
+            $displaysOnline = 0;
+            $displaysOffline = 0;
+            $displaysMediaUpToDate = 0;
+            $displaysMediaNotUpToDate = 0;
+
+            foreach ($displays as $display) {
+                $displayIds[] = $display->displayId;
+                $displayNames[] = $display->display;
+                $displayLoggedIn[] = $display->loggedIn;
+                $displayMediaStatus[] = $display->mediaInventoryStatus;
+            }
+
+            foreach ($displayLoggedIn as $status) {
+                if ($status == 1) {
+                    $displaysOnline++;
+                } else {
+                    $displaysOffline++;
+                }
+            }
+
+            foreach ($displayMediaStatus as $statusMedia) {
+                if ($statusMedia == 1) {
+                    $displaysMediaUpToDate++;
+                } else {
+                    $displaysMediaNotUpToDate++;
+                }
+            }
+
+            $data['displayStatus'] = json_encode([$displaysOnline, $displaysOffline]);
+            $data['displayMediaStatus'] = json_encode([$displaysMediaUpToDate, $displaysMediaNotUpToDate]);
+            $data['displayLabels'] = json_encode($displayNames);
         }
         catch (Exception $e) {
 
@@ -389,10 +428,87 @@ class StatusDashboard extends Base
         }
 
         // Do we have an embedded widget?
-        $data['embeddedWidget'] = html_entity_decode($this->getConfig()->GetSetting('EMBEDDED_STATUS_WIDGET'));
+        $data['embeddedWidget'] = html_entity_decode($this->getConfig()->getSetting('EMBEDDED_STATUS_WIDGET'));
 
         // Render the Theme and output
         $this->getState()->template = 'dashboard-status-page';
         $this->getState()->setData($data);
+    }
+
+    function displayGroups()
+    {
+        $status = null;
+        $inventoryStatus = null;
+        $params = [];
+        $label = $this->getSanitizer()->getString('status');
+        $labelContent = $this->getSanitizer()->getString('inventoryStatus');
+
+        $displayGroupIds = [];
+        $displayGroupNames = [];
+        $displaysAssigned = [];
+        $data = [];
+
+        if (isset($label)) {
+            if ($label == 'Online') {
+                $status = 1;
+            } else {
+                $status = 0;
+            }
+        }
+
+        if (isset($labelContent)) {
+            if ($labelContent == 'Up to Date') {
+                $inventoryStatus = 1;
+            } else {
+                $inventoryStatus = -1;
+            }
+        }
+
+        try {
+            $sql = 'SELECT DISTINCT displaygroup.DisplayGroupID, displaygroup.displayGroup 
+                      FROM displaygroup 
+                        INNER JOIN `lkdisplaydg`
+                          ON lkdisplaydg.DisplayGroupID = displaygroup.DisplayGroupID
+                        INNER JOIN `display`
+                          ON display.displayid = lkdisplaydg.DisplayID
+                      WHERE
+                          displaygroup.IsDisplaySpecific = 0 ';
+
+            if ($status !== null) {
+                $sql .= ' AND display.loggedIn = :status ';
+                $params = ['status' => $status];
+            }
+
+            if ($inventoryStatus != null) {
+                if ($inventoryStatus === -1) {
+                    $sql .= ' AND display.MediaInventoryStatus <> 1';
+                } else {
+                    $sql .= ' AND display.MediaInventoryStatus = :inventoryStatus';
+                    $params = ['inventoryStatus' => $inventoryStatus];
+                }
+            }
+
+            $this->displayFactory->viewPermissionSql('Xibo\Entity\DisplayGroup', $sql, $params, '`lkdisplaydg`.displayGroupId');
+
+            $sql .= ' ORDER BY displaygroup.DisplayGroup ';
+
+            $results = $this->store->select($sql, $params);
+
+            foreach ($results as $row) {
+                $displayGroupNames[] = $row['displayGroup'];
+                $displayGroupIds[] = $row['DisplayGroupID'];
+                $displaysAssigned[] = count($this->displayFactory->query(['displayGroup'], ['displayGroupId' => $row['DisplayGroupID'], 'mediaInventoryStatus' => $inventoryStatus, 'loggedIn' => $status]));
+            }
+
+            $data['displayGroupNames'] = json_encode($displayGroupNames);
+            $data['displayGroupIds'] = json_encode($displayGroupIds);
+            $data['displayGroupMembers'] = json_encode($displaysAssigned);
+
+            $this->getState()->setData($data);
+
+        } catch (Exception $e) {
+            $this->getLog()->error($e->getMessage());
+            $this->getLog()->debug($e->getTraceAsString());
+        }
     }
 }

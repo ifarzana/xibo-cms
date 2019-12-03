@@ -1,9 +1,10 @@
 <?php
-/*
- * Xibo - Digital Signage - http://www.xibo.org.uk
- * Copyright (C) 2015 Spring Signage Ltd
+/**
+ * Copyright (C) 2019 Xibo Signage Ltd
  *
- * This file (routes-web.php) is part of Xibo.
+ * Xibo - Digital Signage - http://www.xibo.org.uk
+ *
+ * This file is part of Xibo.
  *
  * Xibo is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as published by
@@ -37,11 +38,12 @@ $app->get('/', function () use ($app) {
 })->setName('home');
 
 // Dashboards
-$app->get('/dashboard/status', '\Xibo\Controller\StatusDashboard:displayPage')->name('statusdashboard.view');
-$app->get('/dashboard/status/displays', '\Xibo\Controller\StatusDashboard:displays')->name('statusdashboard.displays');
-$app->get('/dashboard/icon', '\Xibo\Controller\IconDashboard:displayPage')->name('dashboard.view');
-$app->get('/dashboard/media', '\Xibo\Controller\MediaManager:displayPage')->name('mediamanager.view');
-$app->get('/dashboard/media/data', '\Xibo\Controller\MediaManager:grid')->name('mediaManager.search');
+$app->get('/statusdashboard', '\Xibo\Controller\StatusDashboard:displayPage')->name('statusdashboard.view');
+$app->get('/statusdashboard/displays', '\Xibo\Controller\StatusDashboard:displays')->name('statusdashboard.displays');
+$app->get('/statusdashboard/displayGroups', '\Xibo\Controller\StatusDashboard:displayGroups')->name('statusdashboard.displayGroups');
+$app->get('/icondashboard', '\Xibo\Controller\IconDashboard:displayPage')->name('icondashboard.view');
+$app->get('/mediamanager', '\Xibo\Controller\MediaManager:displayPage')->name('mediamanager.view');
+$app->get('/mediamanager/data', '\Xibo\Controller\MediaManager:grid')->name('mediamanager.search');
 
 // Login Form
 $app->get('/login', '\Xibo\Controller\Login:loginForm')->name('login');
@@ -49,19 +51,13 @@ $app->get('/login', '\Xibo\Controller\Login:loginForm')->name('login');
 // Login Requests
 $app->post('/login', '\Xibo\Controller\Login:login');
 $app->post('/login/forgotten', '\Xibo\Controller\Login:forgottenPassword')->name('login.forgotten');
+$app->get('/tfa', '\Xibo\Controller\Login:twoFactorAuthForm')->name('tfa');
 
 // Logout Request
 $app->get('/logout', '\Xibo\Controller\Login:logout')->name('logout');
 
 // Ping pong route
 $app->get('/login/ping', '\Xibo\Controller\Login:PingPong')->name('ping');
-
-//
-// upgrade
-//
-$app->get('/update', '\Xibo\Controller\Upgrade:displayPage')->name('upgrade.view');
-$app->post('/update/step/:id', '\Xibo\Controller\Upgrade:doStep')->name('upgrade.doStep');
-$app->delete('/update/step/:id', '\Xibo\Controller\Upgrade:skipStep')->name('upgrade.skipStep');
 
 //
 // schedule
@@ -71,6 +67,7 @@ $app->get('/schedule/form/add', '\Xibo\Controller\Schedule:addForm')->name('sche
 $app->get('/schedule/form/edit/:id', '\Xibo\Controller\Schedule:editForm')->name('schedule.edit.form');
 $app->get('/schedule/form/delete/:id', '\Xibo\Controller\Schedule:deleteForm')->name('schedule.delete.form');
 $app->get('/schedule/form/now/:from/:id', '\Xibo\Controller\Schedule:scheduleNowForm')->name('schedule.now.form');
+$app->get('/schedulenow/form/now/:from/:id', '\Xibo\Controller\Schedule:scheduleNowForm')->name('schedulenow.now.form');
 // Special routes for searching inside the schedule page
 $app->get('/schedule/search/displaygroup', '\Xibo\Controller\DisplayGroup:grid')->name('schedule.displayGroup.search');
 $app->get('/schedule/search/campaign', '\Xibo\Controller\Campaign:grid')->name('schedule.campaign.search');
@@ -84,6 +81,7 @@ $app->get('/drawer/notification/interrupt/:id', '\Xibo\Controller\Notification:i
 $app->get('/notification/form/add', '\Xibo\Controller\Notification:addForm')->name('notification.add.form');
 $app->get('/notification/form/edit/:id', '\Xibo\Controller\Notification:editForm')->name('notification.edit.form');
 $app->get('/notification/form/delete/:id', '\Xibo\Controller\Notification:deleteForm')->name('notification.delete.form');
+$app->get('/notification/export/:id', '\Xibo\Controller\Notification:exportAttachment')->name('notification.exportattachment');
 
 //
 // layouts
@@ -97,9 +95,15 @@ $app->get('/layout/background/:id', '\Xibo\Controller\Layout:downloadBackground'
 // forms
 $app->get('/layout/form/add', '\Xibo\Controller\Layout:addForm')->name('layout.add.form');
 $app->get('/layout/form/edit/:id', '\Xibo\Controller\Layout:editForm')->name('layout.edit.form');
+$app->get('/layout/form/background/:id', '\Xibo\Controller\Layout:editBackgroundForm')->name('layout.background.form');
 $app->get('/layout/form/copy/:id', '\Xibo\Controller\Layout:copyForm')->name('layout.copy.form');
 $app->get('/layout/form/delete/:id', '\Xibo\Controller\Layout:deleteForm')->name('layout.delete.form');
+$app->get('/layout/form/checkout/:id', '\Xibo\Controller\Layout:checkoutForm')->name('layout.checkout.form');
+$app->get('/layout/form/publish/:id', '\Xibo\Controller\Layout:publishForm')->name('layout.publish.form');
+$app->get('/layout/form/discard/:id', '\Xibo\Controller\Layout:discardForm')->name('layout.discard.form');
 $app->get('/layout/form/retire/:id', '\Xibo\Controller\Layout:retireForm')->name('layout.retire.form');
+$app->get('/layout/form/unretire/:id', '\Xibo\Controller\Layout:unretireForm')->name('layout.unretire.form');
+$app->get('/layout/form/setenablestat/:id', '\Xibo\Controller\Layout:setEnableStatForm')->name('layout.setenablestat.form');
 $app->get('/layout/form/upgrade/:id', '\Xibo\Controller\Layout:upgradeForm')->name('layout.upgrade.form');
 $app->get('/layout/form/export/:id', '\Xibo\Controller\Layout:exportForm')->name('layout.export.form');
 $app->get('/layout/form/campaign/assign/:id', '\Xibo\Controller\Layout:assignToCampaignForm')->name('layout.assignTo.campaign.form');
@@ -115,6 +119,15 @@ $app->get('/region/form/timeline/:id', '\Xibo\Controller\Region:timelineForm')->
 //
 // playlists
 //
+$app->get('/playlist/view', '\Xibo\Controller\Playlist:displayPage')->name('playlist.view');
+$app->get('/playlist/form/add', '\Xibo\Controller\Playlist:addForm')->name('playlist.add.form');
+$app->get('/playlist/form/edit/:id', '\Xibo\Controller\Playlist:editForm')->name('playlist.edit.form');
+$app->get('/playlist/form/copy/:id', '\Xibo\Controller\Playlist:copyForm')->name('playlist.copy.form');
+$app->get('/playlist/form/delete/:id', '\Xibo\Controller\Playlist:deleteForm')->name('playlist.delete.form');
+$app->get('/playlist/form/timeline/:id', '\Xibo\Controller\Playlist:timelineForm')->name('playlist.timeline.form');
+$app->get('/playlist/form/setenablestat/:id', '\Xibo\Controller\Playlist:setEnableStatForm')->name('playlist.setenablestat.form');
+
+// Designer
 $app->get('/playlist/form/library/assign/:id', '\Xibo\Controller\Playlist:libraryAssignForm')->name('playlist.library.assign.form');
 // Module functions
 $app->get('/playlist/widget/form/add/:type/:id', '\Xibo\Controller\Module:addWidgetForm')->name('module.widget.add.form');
@@ -122,6 +135,8 @@ $app->get('/playlist/widget/form/edit/:id', '\Xibo\Controller\Module:editWidgetF
 $app->get('/playlist/widget/form/delete/:id', '\Xibo\Controller\Module:deleteWidgetForm')->name('module.widget.delete.form');
 $app->get('/playlist/widget/form/transition/edit/:type/:id', '\Xibo\Controller\Module:editWidgetTransitionForm')->name('module.widget.transition.edit.form');
 $app->get('/playlist/widget/form/audio/:id', '\Xibo\Controller\Module:widgetAudioForm')->name('module.widget.audio.form');
+$app->get('/playlist/widget/form/expiry/:id', '\Xibo\Controller\Module:widgetExpiryForm')->name('module.widget.expiry.form');
+$app->get('/playlist/widget/dataset', '\Xibo\Controller\Module:getDataSets')->name('module.widget.dataset.search');
 // Outputs
 $app->get('/playlist/widget/tab/:tab/:id', '\Xibo\Controller\Module:getTab')->name('module.widget.tab.form');
 $app->get('/playlist/widget/resource/:regionId/:id', '\Xibo\Controller\Module:getResource')->name('module.getResource');
@@ -134,10 +149,12 @@ $app->get('/library/view', '\Xibo\Controller\Library:displayPage')->name('librar
 $app->get('/library/form/edit/:id', '\Xibo\Controller\Library:editForm')->name('library.edit.form');
 $app->get('/library/form/delete/:id', '\Xibo\Controller\Library:deleteForm')->name('library.delete.form');
 $app->get('/library/form/tidy', '\Xibo\Controller\Library:tidyForm')->name('library.tidy.form');
+$app->get('/library/form/uploadUrl', '\Xibo\Controller\Library:uploadFromUrlForm')->name('library.uploadUrl.form');
 $app->get('/library/form/usage/:id', '\Xibo\Controller\Library:usageForm')->name('library.usage.form');
 $app->get('/library/fontcss', '\Xibo\Controller\Library:fontCss')->name('library.font.css');
 $app->get('/library/fontlist', '\Xibo\Controller\Library:fontList')->name('library.font.list');
-
+$app->get('/library/form/copy/:id', '\Xibo\Controller\Library:copyForm')->name('library.copy.form');
+$app->get('/library/form/setenablestat/:id', '\Xibo\Controller\Library:setEnableStatForm')->name('library.setenablestat.form');
 
 //
 // display
@@ -151,6 +168,8 @@ $app->get('/display/form/screenshot/:id', '\Xibo\Controller\Display:requestScree
 $app->get('/display/form/wol/:id', '\Xibo\Controller\Display:wakeOnLanForm')->name('display.wol.form');
 $app->get('/display/form/authorise/:id', '\Xibo\Controller\Display:authoriseForm')->name('display.authorise.form');
 $app->get('/display/form/defaultlayout/:id', '\Xibo\Controller\Display:defaultLayoutForm')->name('display.defaultlayout.form');
+$app->get('/display/form/moveCms/:id', '\Xibo\Controller\Display:moveCmsForm')->name('display.moveCms.form');
+$app->get('/display/form/addViaCode', '\Xibo\Controller\Display:addViaCodeForm')->name('display.addViaCode.form');
 
 //
 // user
@@ -159,12 +178,13 @@ $app->get('/user/view', '\Xibo\Controller\User:displayPage')->name('user.view');
 $app->post('/user/welcome', '\Xibo\Controller\User:userWelcomeSetUnseen')->name('welcome.wizard.unseen');
 $app->put('/user/welcome', '\Xibo\Controller\User:userWelcomeSetSeen')->name('welcome.wizard.seen');
 $app->get('/user/apps', '\Xibo\Controller\User:myApplications')->name('user.applications');
-$app->get('/user/form/password', '\Xibo\Controller\User:changePasswordForm')->name('user.change.password.form');
+$app->get('/user/form/profile', '\Xibo\Controller\User:editProfileForm')->name('user.edit.profile.form');
 $app->get('/user/page/password', '\Xibo\Controller\User:forceChangePasswordPage')->name('user.force.change.password.page');
 $app->get('/user/form/add', '\Xibo\Controller\User:addForm')->name('user.add.form');
 $app->get('/user/form/edit/:id', '\Xibo\Controller\User:editForm')->name('user.edit.form');
 $app->get('/user/form/delete/:id', '\Xibo\Controller\User:deleteForm')->name('user.delete.form');
 $app->get('/user/form/membership/:id', '\Xibo\Controller\User:membershipForm')->name('user.membership.form');
+$app->get('/user/form/preferences', '\Xibo\Controller\User:preferencesForm')->name('user.preferences.form');
 // permissions
 $app->get('/user/permissions/form/:entity/:id', '\Xibo\Controller\User:permissionsForm')->name('user.permissions.form');
 
@@ -219,6 +239,11 @@ $app->get('/dataset/:id/column/form/delete/:colId', '\Xibo\Controller\DataSetCol
 $app->get('/dataset/data/form/add/:id', '\Xibo\Controller\DataSetData:addForm')->name('dataSet.data.add.form');
 $app->get('/dataset/data/form/edit/:id/:rowId', '\Xibo\Controller\DataSetData:editForm')->name('dataSet.data.edit.form');
 $app->get('/dataset/data/form/delete/:id/:rowId', '\Xibo\Controller\DataSetData:deleteForm')->name('dataSet.data.delete.form');
+// RSS
+$app->get('/dataset/:id/rss/view', '\Xibo\Controller\DataSetRss:displayPage')->name('dataSet.rss.view');
+$app->get('/dataset/:id/rss/form/add', '\Xibo\Controller\DataSetRss:addForm')->name('dataSet.rss.add.form');
+$app->get('/dataset/:id/rss/form/edit/:rssId', '\Xibo\Controller\DataSetRss:editForm')->name('dataSet.rss.edit.form');
+$app->get('/dataset/:id/rss/form/delete/:rssId', '\Xibo\Controller\DataSetRss:deleteForm')->name('dataSet.rss.delete.form');
 
 //
 // displaygroup
@@ -230,9 +255,9 @@ $app->get('/displaygroup/form/delete/:id', '\Xibo\Controller\DisplayGroup:delete
 $app->get('/displaygroup/form/members/:id', '\Xibo\Controller\DisplayGroup:membersForm')->name('displayGroup.members.form');
 $app->get('/displaygroup/form/media/:id', '\Xibo\Controller\DisplayGroup:mediaForm')->name('displayGroup.media.form');
 $app->get('/displaygroup/form/layout/:id', '\Xibo\Controller\DisplayGroup:layoutsForm')->name('displayGroup.layout.form');
-$app->get('/displaygroup/form/version/:id', '\Xibo\Controller\DisplayGroup:versionForm')->name('displayGroup.version.form');
 $app->get('/displaygroup/form/command/:id', '\Xibo\Controller\DisplayGroup:commandForm')->name('displayGroup.command.form');
 $app->get('/displaygroup/form/collect/:id', '\Xibo\Controller\DisplayGroup:collectNowForm')->name('displayGroup.collectNow.form');
+$app->get('/displaygroup/form/copy/:id', '\Xibo\Controller\DisplayGroup:copyForm')->name('displayGroup.copy.form');
 
 //
 // displayprofile
@@ -241,6 +266,7 @@ $app->get('/displayprofile/view', '\Xibo\Controller\DisplayProfile:displayPage')
 $app->get('/displayprofile/form/add', '\Xibo\Controller\DisplayProfile:addForm')->name('displayProfile.add.form');
 $app->get('/displayprofile/form/edit/:id', '\Xibo\Controller\DisplayProfile:editForm')->name('displayProfile.edit.form');
 $app->get('/displayprofile/form/delete/:id', '\Xibo\Controller\DisplayProfile:deleteForm')->name('displayProfile.delete.form');
+$app->get('/displayprofile/form/copy/:id', '\Xibo\Controller\DisplayProfile:copyForm')->name('displayProfile.copy.form');
 
 //
 // group
@@ -270,6 +296,7 @@ $app->get('/maintenance/form/tidy', '\Xibo\Controller\Maintenance:tidyLibraryFor
 $app->get('/application/view', '\Xibo\Controller\Applications:displayPage')->name('application.view');
 $app->get('/application/data/activity', '\Xibo\Controller\Applications:viewActivity')->name('application.view.activity');
 $app->get('/application/form/add', '\Xibo\Controller\Applications:addForm')->name('application.add.form');
+$app->get('/application/form/addDooh', '\Xibo\Controller\Applications:addDoohForm')->name('application.addDooh.form');
 $app->get('/application/form/edit/:id', '\Xibo\Controller\Applications:editForm')->name('application.edit.form');
 $app->get('/application/form/delete/:id', '\Xibo\Controller\Applications:deleteForm')->name('application.delete.form');
 $app->get('/application/authorize', '\Xibo\Controller\Applications:authorizeRequest')->name('application.authorize.request');
@@ -359,3 +386,39 @@ $app->get('/task/form/add', '\Xibo\Controller\Task:addForm')->name('task.add.for
 $app->get('/task/form/edit/:id', '\Xibo\Controller\Task:editForm')->name('task.edit.form');
 $app->get('/task/form/delete/:id', '\Xibo\Controller\Task:deleteForm')->name('task.delete.form');
 $app->get('/task/form/runNow/:id', '\Xibo\Controller\Task:runNowForm')->name('task.runNow.form');
+
+//
+// Report Schedule
+//
+$app->get('/report/reportschedule/view', '\Xibo\Controller\Report:displayReportSchedulePage')->name('reportschedule.view');
+$app->get('/report/reportschedule/form/add', '\Xibo\Controller\Report:addReportScheduleForm')->name('reportschedule.add.form');
+$app->get('/report/reportschedule/form/edit/:id', '\Xibo\Controller\Report:editReportScheduleForm')->name('reportschedule.edit.form');
+$app->get('/report/reportschedule/form/delete/:id', '\Xibo\Controller\Report:deleteReportScheduleForm')->name('reportschedule.delete.form');
+$app->get('/report/reportschedule/form/deleteall/:id', '\Xibo\Controller\Report:deleteAllSavedReportReportScheduleForm')->name('reportschedule.deleteall.form');
+$app->get('/report/reportschedule/form/toggleactive/:id', '\Xibo\Controller\Report:toggleActiveReportScheduleForm')->name('reportschedule.toggleactive.form');
+$app->get('/report/reportschedule/form/reset/:id', '\Xibo\Controller\Report:resetReportScheduleForm')->name('reportschedule.reset.form');
+
+//
+// Saved reports
+//
+$app->get('/report/savedreport/view', '\Xibo\Controller\Report:displaySavedReportPage')->name('savedreport.view');
+$app->get('/report/savedreport/:id/report/:name/open', '\Xibo\Controller\Report:savedReportOpen')->name('savedreport.open');
+$app->get('/report/savedreport/:id/report/:name/export', '\Xibo\Controller\Report:savedReportExport')->name('savedreport.export');
+$app->get('/report/savedreport/form/delete/:id', '\Xibo\Controller\Report:deleteSavedReportForm')->name('savedreport.delete.form');
+
+//
+// Ad hoc report
+//
+$app->get('/report/form/:name', '\Xibo\Controller\Report:getReportForm')->name('report.form');
+
+
+// Player Software
+$app->get('/playersoftware/view', '\Xibo\Controller\PlayerSoftware:displayPage')->name('playersoftware.view');
+$app->get('/playersoftware/form/edit/:id', '\Xibo\Controller\PlayerSoftware:editForm')->name('playersoftware.edit.form');
+$app->get('/playersoftware/form/delete/:id', '\Xibo\Controller\PlayerSoftware:deleteForm')->name('playersoftware.delete.form');
+
+// Tags
+$app->get('/tag/view', '\Xibo\Controller\Tag:displayPage')->name('tag.view');
+$app->get('/tag/form/add', '\Xibo\Controller\Tag:addForm')->name('tag.add.form');
+$app->get('/tag/form/edit/:id', '\Xibo\Controller\Tag:editForm')->name('tag.edit.form');
+$app->get('/tag/form/delete/:id', '\Xibo\Controller\Tag:deleteForm')->name('tag.delete.form');

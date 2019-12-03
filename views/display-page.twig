@@ -11,6 +11,7 @@
 
 {% block actionMenu %}
     <ul class="nav nav-pills pull-right">
+        <li class="btn btn-success btn-xs"><a class="XiboFormButton btns" title="{% trans "Add a Display via user_code displayed on the Player screen" %}" href="{{ urlFor("display.addViaCode.form") }}"> <i class="fa fa-plus-circle" aria-hidden="true"></i> {% trans "Add Display (Code)" %}</a></li>
         <li class="btn btn-success btn-xs"><a class="btns" id="refreshGrid" title="{% trans "Refresh the Table" %}" href="#"><i class="fa fa-refresh" aria-hidden="true"></i> {% trans "Refresh" %}</a></li>
     </ul>
 {% endblock %}
@@ -22,36 +23,106 @@
             <div class="XiboGrid" id="{{ random() }}" data-grid-name="displayView">
                 <div class="XiboFilter well">
                     <div class="FilterDiv" id="Filter">
+                        <ul class="nav nav-tabs" role="tablist">
+                            <li class="active"><a href="#filter-general" role="tab" data-toggle="tab">{% trans "General" %}</a></li>
+                            <li><a href="#filter-advanced" role="tab" data-toggle="tab">{% trans "Advanced" %}</a></li>
+                        </ul>
                         <form class="form-inline">
+                            <div class="tab-content">
+                                <div class="tab-pane active" id="filter-general">
+                                    {% set title %}{% trans "ID" %}{% endset %}
+                                    {{ inline.number("displayId", title) }}
 
-                            {% set title %}{% trans "Name" %}{% endset %}
-                            {{ inline.input("display", title) }}
+                                    {% set title %}{% trans "Name" %}{% endset %}
+                                    {{ inline.input("display", title) }}
 
-                            {% set title %}{% trans "Mac Address" %}{% endset %}
-                            {{ inline.input("macAddress", title) }}
+                                    {% set title %}{% trans "Status" %}{% endset %}
+                                    {% set check %}{% trans "Up to date" %}{% endset %}
+                                    {% set cloud %}{% trans "Out of date" %}{% endset %}
+                                    {% set cross %}{% trans "Downloading" %}{% endset %}
+                                    {% set options = [
+                                        { optionid: "", option: "" },
+                                        { optionid: "1", option: check},
+                                        { optionid: "3", option: cloud},
+                                        { optionid: "2", option: cross}
+                                    ] %}
+                                    {{ inline.dropdown("mediaInventoryStatus", "single", title, "", options, "optionid", "option") }}
 
-                            {% set title %}{% trans "Display Group" %}{% endset %}
-                            {{ inline.dropdown("displayGroupId", "single", title, "", [{displayGroupId:null, displayGroup:""}]|merge(displayGroups), "displayGroupId", "displayGroup") }}
+                                    {% set title %}{% trans "Logged In?" %}{% endset %}
+                                    {% set yesOption %}{% trans "Yes" %}{% endset %}
+                                    {% set noOption %}{% trans "No" %}{% endset %}
+                                    {% set options = [
+                                        { optionid: "", option: "" },
+                                        { optionid: "1", option: yesOption},
+                                        { optionid: "0", option: noOption}
+                                    ] %}
+                                    {{ inline.dropdown("loggedIn", "single", title, "", options, "optionid", "option") }}
 
-                            {% set title %}{% trans "Display Profile" %}{% endset %}
-                            {{ inline.dropdown("displayProfileId", "single", title, "", [{displayProfileId:null, name:""}]|merge(displayProfiles), "displayProfileId", "name") }}
+                                    {% set title %}{% trans "Authorised?" %}{% endset %}
+                                    {% set yesOption %}{% trans "Yes" %}{% endset %}
+                                    {% set noOption %}{% trans "No" %}{% endset %}
+                                    {% set options = [
+                                        { optionid: "", option: "" },
+                                        { optionid: "1", option: yesOption },
+                                        { optionid: "0", option: noOption},
+                                    ] %}
+                                    {{ inline.dropdown("authorised", "single", title, "", options, "optionid", "option") }}
 
-                            {% set title %}{% trans "Authorised?" %}{% endset %}
-                            {% set yesOption %}{% trans "Yes" %}{% endset %}
-                            {% set noOption %}{% trans "No" %}{% endset %}
-                            {% set options = [
-                            { optionid: "", option: "" },
-                            { optionid: "1", option: yesOption },
-                            { optionid: "0", option: noOption},
-                            ] %}
-                            {{ inline.dropdown("authorised", "single", title, "", options, "optionid", "option") }}
+                                    {% set title %}{% trans "Tags" %}{% endset %}
+                                    {% set helpText %}{% trans "A comma separated list of tags to filter by. Enter a Tag value preceded with | to filter by Tag values. Enter --no-tag to see items without tags." %}{% endset %}
+                                    {{ inline.inputWithTags("tags", title, null, helpText) }}
 
-                            {% set title %}{% trans "Tags" %}{% endset %}
-                            {% set helpText %}{% trans "A comma separated list of tags to filter by. Enter --no-tag to see items without tags." %}{% endset %}
-                            {{ inline.inputWithTags("tags", title, null, helpText) }}
+                                    {% set title %}{% trans "Exact match?" %}{% endset %}
+                                    {{ inline.checkbox("exactTags", title) }}
 
-                            {% set title %}{% trans "IP Address" %}{% endset %}
-                            {{ inline.input("clientAddress", title) }}
+                                    {% set title %}{% trans "Display Group" %}{% endset %}
+                                    {{ inline.dropdown("displayGroupId", "single", title, "", [{displayGroupId:null, displayGroup:""}]|merge(displayGroups), "displayGroupId", "displayGroup") }}
+
+                                    {% set title %}{% trans "Display Profile" %}{% endset %}
+                                    {{ inline.dropdown("displayProfileId", "single", title, "", [{displayProfileId:null, name:""}]|merge(displayProfiles), "displayProfileId", "name") }}
+                                </div>
+
+                                <div class="tab-pane" id="filter-advanced">
+                                    {% set title %}{% trans "Last Accessed" %}{% endset %}
+                                    <div class="form-group">
+                                        <label class="control-label" for="lastAccessed">{{ title }}</label>
+                                        <div class="input-group date" style="display:table;">
+                                            <input type="hidden" name="lastAccessed" id="lastAccessed" />
+                                            <input class="form-control datePicker dateControl" name="lastAccessedLink"
+                                                   type="text" id="lastAccessedLink" data-link-field="lastAccessed"
+                                                   data-link-format="yyyy-mm-dd hh:ii:ss" readonly />
+                                            <span class="input-group-addon" id="lastAccessedControlCancel">
+                                                <span class="fa fa-times-circle"></span>
+                                            </span>
+                                        </div>
+                                    </div>
+
+                                    {% set title %}{% trans "Player Type" %}{% endset %}
+                                    {% set android %}{% trans "Android" %}{% endset %}
+                                    {% set windows %}{% trans "Windows" %}{% endset %}
+                                    {% set webos %}{% trans "webOS" %}{% endset %}
+                                    {% set sssp %}{% trans "Tizen" %}{% endset %}
+                                    {% set linux %}{% trans "Linux" %}{% endset %}
+                                    {% set options = [
+                                        { optionid: "", option: "" },
+                                        { optionid: "android", option: android},
+                                        { optionid: "windows", option: windows},
+                                        { optionid: "lg", option: webos},
+                                        { optionid: "sssp", option: sssp},
+                                        { optionid: "linux", option: linux},
+                                    ] %}
+                                    {{ inline.dropdown("clientType", "single", title, "", options, "optionid", "option") }}
+
+                                    {% set title %}{% trans "Player Code" %}{% endset %}
+                                    {{ inline.input("clientCode", title) }}
+
+                                    {% set title %}{% trans "Mac Address" %}{% endset %}
+                                    {{ inline.input("macAddress", title) }}
+
+                                    {% set title %}{% trans "IP Address" %}{% endset %}
+                                    {{ inline.input("clientAddress", title) }}
+                                </div>
+                            </div>
                         </form>
                     </div>
                 </div>
@@ -82,9 +153,10 @@
                                 <th>{% trans "Timezone" %}</th>
                                 <th>{% trans "Screen shot?" %}</th>
                                 <th>{% trans "Thumbnail" %}</th>
+                                <th>{% trans "Bandwidth Limit" %}</th>
                                 <th>{% trans "Last Command" %}</th>
                                 <th>{% trans "XMR Registered" %}</th>
-                                <th></th>
+                                <th>{% trans "Row Menu" %}</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -202,7 +274,7 @@
                             else
                                 icon = "fa-cloud-download";
 
-                            return "<span class='fa " + icon + "'></span>";
+                            return "<span class='fa " + icon + "' title='" + (row.statusDescription) + "'></span>";
                         }
                     },
                     {"data": "licensed", "render": dataTableTickCrossColumn},
@@ -258,8 +330,9 @@
                     {"data": "clientAddress", "visible": false},
                     {"data": "macAddress"},
                     {"data": "timeZone", "visible": false},
-                    {"data": "screenShotRequested", "render": dataTableTickCrossColumn, "visible": false},
+                    {"data": "screenShotRequested", "render": dataTableTickCrossColumn, "visible": false, "name": "screenShotRequested"},
                     {
+                        "name": "thumbnail",
                         "orderable": false,
                         "data": function (data, type) {
                             if (type != "display")
@@ -272,6 +345,12 @@
                                 return "";
                             }
                         },
+                        "visible": false
+                    },
+                    {
+                        "name": "bandwidthLimit",
+                        "data": null,
+                        "render": {"_": "bandwidthLimit", "display": "bandwidthLimitFormatted", "sort": "bandwidthLimit"},
                         "visible": false
                     },
                     {
@@ -327,13 +406,40 @@
             $("#refreshGrid").click(function () {
                 table.ajax.reload();
             });
+
+            $("#lastAccessedControlCancel").on('click', function() {
+                // Clear the date picker
+                var $lastAccessed = $("#lastAccessed");
+                $lastAccessed.val("");
+                $("#lastAccessedLink").val("");
+
+                table.ajax.reload();
+
+                // Reset local storage
+                localStorage.setItem("displayView", JSON.stringify($lastAccessed.closest("form").serializeArray()));
+            });
         });
+
+        {% set showThumbnailColumn = currentUser.getOptionValue("showThumbnailColumn", 1) %}
+
+        function displayRequestScreenshotFormSubmit() {
+            $("#displayRequestScreenshotForm").submit();
+            XiboDialogClose();
+
+            {% if showThumbnailColumn == 1 %}
+                var table = $('#displays').DataTable();
+                if (!table.column(["thumbnail:name"]).visible()) {
+                    table.columns(["screenShotRequested:name", "thumbnail:name"]).visible(true);
+                }
+            {% endif %}
+        }
+
 
         function setDefaultMultiSelectFormOpen(dialog) {
             console.log('Multi-select form opened for default layout');
 
             // Inject a list of layouts into the form, in a drop down.
-            var $select = $('<select name="layoutId" class="form-control" data-search-url="{{ urlFor("layout.search") }}" data-search-term="layout" data-id-property="layoutId" data-text-property="layout">');
+            var $select = $('<select name="layoutId" class="form-control" data-search-url="{{ urlFor("layout.search") }}" data-search-term="layout" data-search-term-tags="tags" data-id-property="layoutId" data-text-property="layout">');
             $select.on('change', function() {
                 console.log('Setting commit data to ' + $(this).val());
                 dialog.data().commitData = {layoutId: $(this).val()};
@@ -344,5 +450,356 @@
 
             makePagedSelect($select, dialog);
         }
+
+        function setMoveCmsMultiSelectFormOpen(dialog) {
+            console.log('Multi-select form opened for move CMS');
+
+            let $message = $(
+                '<div class="col-sm-12 alert alert-info">' +
+                    "<p>{% trans 'Please note: Once the CMS Address and Key are authenticated in this form the Display will attempt to register with the CMS Instance details entered. Once transferred the Display will stop communicating with this CMS Instance.' %}</p>" +
+                '</div>'
+            );
+
+            $(dialog).find('.modal-body').append($message);
+
+            let $cmsAddress =   $(
+                '<div class="form-group">' +
+                    '<label class="col-sm-2 control-label" for="newCmsAddress" accesskey="">New CMS Address</label>' +
+                    '<div class="col-sm-10">' +
+                        '<input class="form-control" name="newCmsAddress" type="text" id="newCmsAddress" value="">' +
+                        '<span class="help-block">{% trans "Full URL to the new CMS, including https:// "%}</span>' +
+                    '</div>' +
+                '</div>'
+            );
+
+            let $cmsKey = $(
+                '<div class="form-group">' +
+                    '<label class="col-sm-2 control-label" for="newCmsKey" accesskey="">New CMS Key</label>' +
+                    '<div class="col-sm-10">' +
+                        '<input class="form-control" name="newCmsKey" type="text" id="newCmsKey" value="">' +
+                        '<span class="help-block">{% trans "CMS Secret Key associated with the provided new CMS Address"%}</span>' +
+                    '</div>' +
+                '</div>'
+            );
+
+            let $authenticationCode =   $(
+                '<div class="form-group">' +
+                    '<label class="col-sm-2 control-label" for="twoFactorCode" accesskey="">Two Factor Code</label>' +
+                    '<div class="col-sm-10">' +
+                        '<input class="form-control" name="twoFactorCode" type="text" id="twoFactorCode" value="">' +
+                        '<span class="help-block">{% trans "Please enter your Two Factor authentication code"%}</span>' +
+                    '</div>' +
+                '</div>'
+            );
+
+            $(dialog).find('.modal-body').append($cmsAddress, $cmsKey, $authenticationCode);
+
+            $('#twoFactorCode, #newCmsAddress, #newCmsKey').on('change', function() {
+
+                dialog.data().commitData = {
+                        newCmsAddress: $('#newCmsAddress').val(),
+                        newCmsKey: $('#newCmsKey').val(),
+                        twoFactorCode: $('#twoFactorCode').val()
+                    };
+            });
+        }
+
+        function displayEditFormOpen(dialog) {
+
+            // Setup display profile form
+            displayProfileFormOpen();
+            XiboInitialise('#settings-from-display-profile');
+
+            var $settings = $(dialog).find('#settings-from-display-profile').find('.form-group');
+            var $table = $(dialog).find('#settings-from-profile tbody').empty();
+            var override = $(dialog).data('extra');
+
+            // Parse special fields
+            override.forEach(function(field, index) {
+                if(['lockOptions','pictureOptions', 'timers'].includes(field.name)) {
+                    let parsedValues = JSON.parse(field.value);
+                    
+                    // Add values to the override array
+                    $.each(parsedValues, function(name, value){
+
+                        if(name == 'keylock') {
+                            $.each(value, function(keylockName, keylockValue){
+                                if(keylockName == 'local') {
+                                    keylockName = 'keylockLocal';
+                                }
+
+                                if(keylockName == 'remote') {
+                                    keylockName = 'keylockRemote';
+                                }
+
+                                override.push({name: keylockName, value: keylockValue})
+                            });
+                        }
+                        // Convert boolean and numbers to string
+                        value = (['boolean','number'].includes(typeof value)) ? value.toString() : value;
+
+                        override.push({name: name, value: value})
+                    });
+                }
+            });
+
+            // Method to create a new input field based on the hidden form
+            const createInputField = function(target, inputName, newValue = null) {
+                
+                let select2FixFlag = false;
+
+                // Grab input field from hidden table
+                let $inputFields = $settings.find('#' + inputName);
+
+                // If no input field is capture by ID, get special fields
+                if($inputFields.length == 0) {
+                    if( $settings.find('.multiSelect').length > 0) {
+                        // Copy special fields ( timers, pictureOptions ) by selected option
+                        $inputFields = $settings.find('.multiSelect option:selected[value="' + inputName + '"]').parents('.form-group:first').find('.multiSelect, .multiSelectInputs');
+                    } 
+                } else if($inputFields.length == 1 && $inputFields.attr('type') == 'hidden') {
+                    // Time inputs
+                    $inputFields = $inputFields.parent().find('input');
+                } else if($inputFields.length == 1 && $inputFields.hasClass('select2-hidden-accessible')) {
+                    select2FixFlag = true;
+                    // Destroy select2 before copying
+                    $inputFields.select2('destroy');
+                }
+
+                // Save old field before cloning
+                $inputFieldsOld = $inputFields;
+
+                // Clone input fields ( to be able to reuse the originals )
+                $inputFields = $inputFields.clone(true);
+
+                if(select2FixFlag) {
+                    // Restore old field to a select2
+                    makePagedSelect($inputFieldsOld);
+                }
+                // Add input field to the target
+                $(target).html($inputFields);
+
+                // Set value if defined
+                if(newValue != null) {
+                    if($(target).find('.multiSelectInputs .timePickerDisplayEditForm').length > 0) {
+                        // MULTI TIMERS
+                        $(target).find('#' + $(target).find('.timersOn').attr('id') + 'Link').timepicker('setTime', newValue.on);
+                        $(target).find('#' + $(target).find('.timersOff').attr('id') + 'Link').timepicker('setTime', newValue.off);
+                    } else if($(target).find('.multiSelectInputs .pictureControlsSlider').length > 0) {
+                        // SLIDER
+                        if(!$.isNumeric(newValue)) { // If value is a label, get index
+                            $(target).find('.multiSelectInputs .slider-tick-label').each(function(idx, el) {
+                                if($(el).html() == newValue) {
+                                    newValue = idx;
+                                    return false; 
+                                }
+                            });
+                        }
+                        
+                        // Set value
+                        $(target).find('.pictureControlsSlider').slider('setAttribute', 'value', newValue);
+                    } else if($inputFields.attr('type') == 'checkbox') {
+                        // CHECKBOX
+                        $($inputFields).prop('checked', newValue);
+                    } else {
+                        $($inputFields).val(newValue);
+                    }
+                }
+
+                // Reload select 2 with new value
+                if(select2FixFlag) {
+                    // Restore select2 after value set
+                    makePagedSelect($inputFields);
+                }
+
+                // If there's a multiselect, set the value of the dropdown ( it's not kept on cloning ) and hide it
+                $(target).find('.multiSelect').val(inputName).hide();
+
+                // Style multi selects
+                if($(target).find('.multiSelectInputs').length > 0) {
+                    // Calculate column size for bootstrap
+                    let colSize = Math.round(12/$(target).find('.multiSelectInputs').length);
+                    
+                    //Remove all style classes and add the new size class
+                    $(target).find('.multiSelectInputs').attr('class', 'multiSelectInputs col-sm-' + colSize)
+                }
+
+                // Set data propeties
+                $(target).attr('data-editing', 'true');
+                $(target).attr('data-input-name', inputName);
+
+                // Remove click to edit event
+                $(target).unbind('click');
+
+                // Fixes for slider
+                $(target).find('.slider').addClass('scaled-slider');
+                $(target).find('.pictureControlsSlider').slider('refresh', { useCurrentValue: true });
+
+                let $newButton = $('<button class="btn btn-danger btn-xs pull-right button-close-override" type="button"><i class="fa fa-times"></i></button>').click(function (e) {
+                    e.stopPropagation();
+                    restoreInputField(target, inputName);
+                 });
+                $(target).append($newButton);
+            };
+
+
+            // Method to restore the input field to the edit button
+            const restoreInputField = function(target, inputName) {
+
+                $(target).html('<button class="btn btn-block" type="button"><i class="fa fa-edit"></i></button>');
+
+                // Handlers for field edit
+                $(target).off().click(function() {
+                    if(!$(this).data('editing')) {
+                        createInputField($(this), inputName);
+                    }
+                });
+
+                $(target).attr('data-editing', 'false');
+            };
+
+            // Build table
+            $.each($settings, function(index, element) {
+                var $label = $(element).find('label');
+                var $input = $(element).find('input,select');
+                var over = $label.prop("for");
+                var value = '';
+                var text = '';
+
+                // Skip for some fields
+                if(['name', 'isDefault'].includes(over)) {
+                    return true;
+                }
+
+                if($(element).hasClass('form-group-timers')) {
+                    // Get text and override name
+                    over = $(element).find('.multiSelect').val();
+                    text = $(element).find('.multiSelect option:selected').text();
+                    
+                    // Get value
+                    value = $(element).find('.timersOn').val() + ' - ' + $(element).find('.timersOff').val(); 
+                } else if($(element).hasClass('form-group-picture-options')) {
+                    // Get text and override name
+                    over = $(element).find('.multiSelect').val();
+                    text = $(element).find('.multiSelect option:selected').text();
+
+                    // Get labels
+                    var labels = [];
+                    $(element).find('.multiSelectInputs .slider-tick-label').each(function(idx, el) {
+                        labels.push($(el).html());
+                    });
+
+                    // Get value
+                    value = $(element).find('.multiSelectInputs .pictureControlsSlider').slider('getValue');
+
+                    // If specific value has a label, use it as value
+                    if(labels[value] != undefined) {
+                        value = labels[value];
+                    }
+                } else if($input.attr('type') == 'checkbox'){
+                    // Get text and value
+                    text = $label.text();
+                    value = $input.is(":checked");
+
+                } else if($input.is('select')){
+                    // Get text and value
+                    text = $label.text();
+                    value = $input.find('option:selected').text();
+                } else {
+                    // Get text and value
+                    text = $label.text();
+                    value = $input.val();
+                }
+
+                // Skip empty fields
+                if(over == '' || over == undefined || over == null) {
+                    return true;
+                }
+
+                // Append new row to the table
+                var $tableNewRow = $('<tr class="row-fluid"><td class="col-xs-5"><strong>' + text + '</strong></td><td class="col-xs-3"><div>' + value + '</div></td><td class="col-xs-4 override-input" data-editing="false" data-input-name="' + over + '"><button class="btn btn-block" type="button"><i class="fa fa-edit"></i></button></td></tr>').appendTo($table);
+
+                // Get override element
+                var overrideEl = override.find((x) => { return x.name === over; });
+                if(overrideEl != undefined) { //If element was found, create an input
+
+                    // Create input with override value
+                    createInputField($tableNewRow.find('.override-input'), over, overrideEl.value);
+                }
+            });
+
+            // Handlers for field edit
+            $(dialog).find('.override-input[data-editing="false"]').click(function() {
+                const inputName = $(this).data('inputName');
+                createInputField($(this), inputName);
+            });
+
+            // Refresh on tab switch to fix broken labels
+            $('a[data-toggle="tab"]').on('shown.bs.tab', () =>  {
+                $('.pictureControlsSlider').slider('refresh', { useCurrentValue: true });
+            });
+
+            // Call XiboInitialise on table
+            XiboInitialise('#settings-from-profile');
+        }
+
+        // Custom submit for display form
+        function displayEditFormSubmit() {
+            let $form = $('#displayEditForm');
+            // Grab and alter the value in the bandwidth limit field
+            let bandwidthLimitField = $form.find("input[name=bandwidthLimit]");
+            let bandwidthLimitUnitsField = $form.find("select[name=bandwidthLimitUnits]");
+            let bandwidthLimit = bandwidthLimitField.val();
+
+            if (bandwidthLimitUnitsField.val() == 'mb') {
+                bandwidthLimit = bandwidthLimit * 1024;
+            } else if (bandwidthLimitUnitsField.val() == 'gb') {
+                bandwidthLimit = bandwidthLimit * 1024 * 1024;
+            }
+
+            // Set the field
+            bandwidthLimitField.prop('value', bandwidthLimit);
+
+            // Remove temp fields and enable checkbox after submit
+            $form.submit(function(event) {
+                event.preventDefault();
+                // Re-enable checkboxes
+                $form.find('input[type="checkbox"]').each(function () {
+                    // Enable checkbox
+                    $(this).attr('disabled', false);
+                });
+
+                // Remove temp input fields
+                $form.find('input.temp-input').each(function () {
+                    $(this).remove();
+                });
+            });
+
+            // Replace all checkboxes with hidden input fields
+            $form.find('input[type="checkbox"]').each(function () {
+                // Get checkbox values
+                let value = $(this).is(':checked') ? 'on' : 'off';
+                let id = $(this).attr('id');
+
+                // Create hidden input
+                $('<input type="hidden" class="temp-input">')
+                    .attr('id', id)
+                    .attr('name', id)
+                    .val(value)
+                    .appendTo($(this).parent());
+
+                // Disable checkbox so it won't be submitted
+                $(this).attr('disabled', true);
+            });
+
+            // Submit form
+            $form.submit();
+        }
     </script>
+
+    <style>
+        #settings-from-profile tr.row-fluid { 
+            height: 50px;
+        }
+    </style>
 {% endblock %}

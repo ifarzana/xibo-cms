@@ -133,6 +133,13 @@
 
                     $.extend(data, $("#datasets").closest(".XiboGrid").find(".FilterDiv form").serializeObject());
                     return data;
+                },
+                complete: function (response) {
+
+                    if (response.responseJSON.data.exception != '' && response.responseJSON.data.exception != undefined) {
+                        let error = response.responseJSON.data.exception;
+                        $("#datasets tbody").html(error)
+                    }
                 }
             },
             "columns": cols
@@ -140,14 +147,15 @@
 
         table.on('draw', dataTableDraw);
         table.on('processing.dt', dataTableProcessing);
+        dataTableAddButtons(table, $('#datasets_wrapper').find('.col-sm-6').eq(1));
 
-        var dataSetEditFormOpen = $.debounce(500, true, function() {
+        var dataSetEditFormOpen = _.debounce(function() {
             var data = table.row($(this)).data();
 
             // Load the edit form.
             var editUrl = "{{ urlFor("dataSet.data.edit.form", {"id": dataSet.dataSetId}) }}".replace(":rowId", data.id);
             XiboFormRender(editUrl);
-        });
+        }, 500, true);
         
         $("#datasets tbody").on('click', 'tr', dataSetEditFormOpen);
     </script>

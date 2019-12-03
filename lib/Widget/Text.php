@@ -44,30 +44,26 @@ class Text extends ModuleWidget
     }
 
     /**
-     * @throws InvalidArgumentException
+     * Javascript functions for the layout designer
      */
-    public function validate()
+    public function layoutDesignerJavaScript()
     {
-        // Validation
-        if ($this->getOption('text') == '')
-            throw new InvalidArgumentException(__('Please enter some text'), 'text');
-
-        if ($this->getUseDuration() == 1 && $this->getDuration() == 0)
-            throw new InvalidArgumentException(__('You must enter a duration.'), 'duration');
+        return 'text-designer-javascript';
     }
 
     /**
-     * Adds a Text Widget
-     * @SWG\Post(
-     *  path="/playlist/widget/text/{playlistId}",
-     *  operationId="WidgetTextAdd",
+     * Edit Text Widget
+     *
+     * @SWG\Put(
+     *  path="/playlist/widget/{widgetId}?text",
+     *  operationId="WidgetTextEdit",
      *  tags={"widget"},
-     *  summary="Add a Text Widget",
-     *  description="Add a new Text Widget to the specified playlist",
+     *  summary="Edit a Text Widget",
+     *  description="Edit a new Text Widget. This call will replace existing Widget object, all not supplied parameters will be set to default.",
      *  @SWG\Parameter(
-     *      name="playlistId",
+     *      name="widgetId",
      *      in="path",
-     *      description="The playlist ID to add a Widget to",
+     *      description="The WidgetId to Edit",
      *      type="integer",
      *      required=true
      *   ),
@@ -92,6 +88,13 @@ class Text extends ModuleWidget
      *      type="integer",
      *      required=false
      *  ),
+     *  @SWG\Parameter(
+     *      name="enableStat",
+     *      in="formData",
+     *      description="The option (On, Off, Inherit) to enable the collection of Widget Proof of Play statistics",
+     *      type="string",
+     *      required=false
+     *   ),
      *  @SWG\Parameter(
      *      name="effect",
      *      in="formData",
@@ -128,6 +131,13 @@ class Text extends ModuleWidget
      *      required=true
      *   ),
      *  @SWG\Parameter(
+     *      name="ta_text_advanced",
+     *      in="formData",
+     *      description="A flag (0, 1), Should text area by presented as a visual editor?",
+     *      type="integer",
+     *      required=false
+     *   ),
+     *  @SWG\Parameter(
      *      name="javaScript",
      *      in="formData",
      *      description="Optional JavaScript",
@@ -135,48 +145,18 @@ class Text extends ModuleWidget
      *      required=false
      *   ),
      *  @SWG\Response(
-     *      response=201,
-     *      description="successful operation",
-     *      @SWG\Schema(ref="#/definitions/Widget"),
-     *      @SWG\Header(
-     *          header="Location",
-     *          description="Location of the new widget",
-     *          type="string"
-     *      )
+     *      response=204,
+     *      description="successful operation"
      *  )
      * )
      *
      * @throws InvalidArgumentException
      */
-    public function add()
-    {
-        $this->setCommonOptions();
-
-        // Save the widget
-        $this->validate();
-        $this->saveWidget();
-    }
-
-    /**
-     * Edit Media
-     * @throws InvalidArgumentException
-     */
     public function edit()
-    {
-        $this->setCommonOptions();
-
-        // Save the widget
-        $this->validate();
-        $this->saveWidget();
-    }
-
-    /**
-     * Set common options
-     */
-    private function setCommonOptions()
     {
         $this->setDuration($this->getSanitizer()->getInt('duration', $this->getDuration()));
         $this->setUseDuration($this->getSanitizer()->getCheckbox('useDuration'));
+        $this->setOption('enableStat', $this->getSanitizer()->getString('enableStat'));
         $this->setOption('xmds', true);
         $this->setOption('effect', $this->getSanitizer()->getString('effect'));
         $this->setOption('speed', $this->getSanitizer()->getInt('speed'));
@@ -184,15 +164,16 @@ class Text extends ModuleWidget
         $this->setOption('name', $this->getSanitizer()->getString('name'));
         $this->setOption('marqueeInlineSelector', $this->getSanitizer()->getString('marqueeInlineSelector'));
         $this->setRawNode('text', $this->getSanitizer()->getParam('ta_text', $this->getSanitizer()->getParam('text', null)));
+        $this->setOption('ta_text_advanced', $this->getSanitizer()->getCheckbox('ta_text_advanced'));
         $this->setRawNode('javaScript', $this->getSanitizer()->getParam('javaScript', ''));
+
+        // Save the widget
+        $this->isValid();
+        $this->saveWidget();
     }
 
-    /**
-     * Get Resource
-     * @param int $displayId
-     * @return mixed
-     */
-    public function GetResource($displayId = 0)
+    /** @inheritdoc */
+    public function getResource($displayId = 0)
     {
         // Start building the template
         $this
@@ -227,9 +208,6 @@ class Text extends ModuleWidget
             'speed' => $this->getOption('speed', 0),
             'originalWidth' => $this->region->width,
             'originalHeight' => $this->region->height,
-            'previewWidth' => $this->getSanitizer()->getDouble('width', 0),
-            'previewHeight' => $this->getSanitizer()->getDouble('height', 0),
-            'scaleOverride' => $this->getSanitizer()->getDouble('scale_override', 0),
             'marqueeInlineSelector' => $this->getOption('marqueeInlineSelector', '.item, .item p')
         ]);
 
@@ -252,6 +230,11 @@ class Text extends ModuleWidget
         if (stripos($text, '[Date]')) {
             $clock = true;
             $text = str_replace('[Date]', '[DD/MM/YYYY]', $text);
+        }
+
+        if (stripos($text, '[Date|')) {
+            $clock = true;
+            $text = str_replace('[Date|', '[', $text);
         }
 
         if ($clock) {
@@ -311,23 +294,16 @@ class Text extends ModuleWidget
     }
 
     /** @inheritdoc */
-    public function hoverPreview()
-    {
-        // Default Hover window contains a thumbnail, media type and duration
-        $output = parent::hoverPreview();
-
-        $output .= '<div class="hoverPreview" data-scale="true">';
-        $output .= '    ' . $this->getRawNode('text', null);;
-        $output .= '</div>';
-
-        return $output;
-    }
-
-    /** @inheritdoc */
     public function isValid()
     {
-        // Text rendering will be valid
-        return 1;
+        // Validation
+        if ($this->getOption('text') == '')
+            throw new InvalidArgumentException(__('Please enter some text'), 'text');
+
+        if ($this->getUseDuration() == 1 && $this->getDuration() == 0)
+            throw new InvalidArgumentException(__('You must enter a duration.'), 'duration');
+
+        return self::$STATUS_VALID;
     }
 
     /** @inheritdoc */

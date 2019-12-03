@@ -48,7 +48,6 @@ class Stocks extends AlphaVantageBase
             $module->type = 'stocks';
             $module->class = 'Xibo\Widget\Stocks';
             $module->description = 'A module for showing Stock quotes';
-            $module->imageUri = 'forms/library.gif';
             $module->enabled = 1;
             $module->previewEnabled = 1;
             $module->assignable = 1;
@@ -57,6 +56,7 @@ class Stocks extends AlphaVantageBase
             $module->schemaVersion = $this->codeSchemaVersion;
             $module->defaultDuration = 30;
             $module->settings = [];
+            $module->installName = 'stocks';
 
             $this->setModule($module);
             $this->installModule();
@@ -76,6 +76,15 @@ class Stocks extends AlphaVantageBase
         $this->mediaFactory->createModuleSystemFile(PROJECT_ROOT . '/modules/xibo-layout-scaler.js')->save();
         $this->mediaFactory->createModuleSystemFile(PROJECT_ROOT . '/modules/xibo-image-render.js')->save();
         $this->mediaFactory->createModuleSystemFile(PROJECT_ROOT . '/modules/vendor/bootstrap.min.css')->save();
+    }
+
+
+    /**
+     * Javascript functions for the layout designer
+     */
+    public function layoutDesignerJavaScript()
+    {
+        return 'stocks-designer-javascript';
     }
 
     /**
@@ -111,35 +120,18 @@ class Stocks extends AlphaVantageBase
     }
 
     /**
-     * Validate
-     * @throws InvalidArgumentException
-     */
-    public function validate()
-    {
-        if($this->getOption('overrideTemplate') == 0 && ( $this->getOption('templateId') == '' || $this->getOption('templateId') == null) )
-            throw new InvalidArgumentException(__('Please choose a template'), 'templateId');
-            
-        if ($this->getUseDuration() == 1 && $this->getDuration() == 0)
-            throw new InvalidArgumentException(__('Please enter a duration'), 'duration');
-
-        // Validate for the items field
-        if ($this->getOption('items') == '')
-            throw new InvalidArgumentException(__('Please provide a comma separated list of symbols in the items field.'), 'items');
-    }
-
-
-    /**
-     * Adds a Stocks Widget
-     * @SWG\Post(
-     *  path="/playlist/widget/stocks/{playlistId}",
-     *  operationId="WidgetStocksAdd",
+     * Edit Widget
+     *
+     * @SWG\Put(
+     *  path="/playlist/widget/{widgetId}?stocks",
+     *  operationId="WidgetStocksEdit",
      *  tags={"widget"},
-     *  summary="Add a Stocks Widget",
-     *  description="Add a new Stocks Widget to the specified playlist",
+     *  summary="Edit a Stocks Widget",
+     *  description="Edit a new Stocks Widget. This call will replace existing Widget object, all not supplied parameters will be set to default.",
      *  @SWG\Parameter(
-     *      name="playlistId",
+     *      name="widgetId",
      *      in="path",
-     *      description="The playlist ID to add a Stocks widget",
+     *      description="The WidgetId to Edit",
      *      type="integer",
      *      required=true
      *   ),
@@ -165,9 +157,16 @@ class Stocks extends AlphaVantageBase
      *      required=false
      *  ),
      *  @SWG\Parameter(
+     *      name="enableStat",
+     *      in="formData",
+     *      description="The option (On, Off, Inherit) to enable the collection of Widget Proof of Play statistics",
+     *      type="string",
+     *      required=false
+     *   ),
+     *  @SWG\Parameter(
      *      name="items",
      *      in="formData",
-     *      description="Items wanted, can be comma separated",
+     *      description="A comma separated list of Stock Ticker Symbols, e.g. GOOGL,NVDA,AMZN. For the best results enter no more than 5 items.",
      *      type="string",
      *      required=true
      *   ),
@@ -270,43 +269,19 @@ class Stocks extends AlphaVantageBase
      *      required=false
      *   ),
      *  @SWG\Response(
-     *      response=201,
-     *      description="successful operation",
-     *      @SWG\Schema(ref="#/definitions/Widget"),
-     *      @SWG\Header(
-     *          header="Location",
-     *          description="Location of the new widget",
-     *          type="string"
-     *      )
+     *      response=204,
+     *      description="successful operation"
      *  )
      * )
-     */
-    public function add()
-    {
-        $this->setCommonOptions();
-
-        // Save the widget
-        $this->validate();
-        $this->saveWidget();
-    }
-
-    /**
-     * Edit Media
+     *
+     * @throws \Xibo\Exception\XiboException
      */
     public function edit()
-    {
-        $this->setCommonOptions();
-
-        // Save the widget
-        $this->validate();
-        $this->saveWidget();
-    }
-
-    public function setCommonOptions()
     {
         $this->setDuration($this->getSanitizer()->getInt('duration', $this->getDuration()));
         $this->setUseDuration($this->getSanitizer()->getCheckbox('useDuration'));
         $this->setOption('name', $this->getSanitizer()->getString('name'));
+        $this->setOption('enableStat', $this->getSanitizer()->getString('enableStat'));
         $this->setOption('items', $this->getSanitizer()->getString('items'));
         $this->setOption('effect', $this->getSanitizer()->getString('effect'));
         $this->setOption('speed', $this->getSanitizer()->getInt('speed'));
@@ -318,8 +293,8 @@ class Stocks extends AlphaVantageBase
         $this->setOption('templateId', $this->getSanitizer()->getString('templateId'));
         $this->setOption('durationIsPerPage', $this->getSanitizer()->getCheckbox('durationIsPerPage'));
         $this->setRawNode('javaScript', $this->getSanitizer()->getParam('javaScript', ''));
-        
-        if( $this->getOption('overrideTemplate') == 1 ){
+
+        if ($this->getOption('overrideTemplate') == 1) {
             $this->setOption('widgetOriginalWidth', $this->getSanitizer()->getInt('widgetOriginalWidth'));
             $this->setOption('widgetOriginalHeight', $this->getSanitizer()->getInt('widgetOriginalHeight'));
             $this->setOption('maxItemsPerPage', $this->getSanitizer()->getInt('maxItemsPerPage', 4));
@@ -327,6 +302,10 @@ class Stocks extends AlphaVantageBase
             $this->setRawNode('itemTemplate', $this->getSanitizer()->getParam('itemTemplate', $this->getSanitizer()->getParam('itemTemplate', null)));
             $this->setRawNode('styleSheet', $this->getSanitizer()->getParam('styleSheet', $this->getSanitizer()->getParam('styleSheet', null)));
         }
+
+        // Save the widget
+        $this->isValid();
+        $this->saveWidget();
     }
 
     /**
@@ -382,7 +361,7 @@ class Stocks extends AlphaVantageBase
                         'Currency' => $currency
                     ];
 
-                    $parsedResult['Change'] = round($parsedResult['RawYesterdayTradePriceOnly'] - $parsedResult['RawLastTradePriceOnly'], 4);
+                    $parsedResult['Change'] = round($parsedResult['RawLastTradePriceOnly'] - $parsedResult['RawYesterdayTradePriceOnly'], 4);
 
                     break;
                 }
@@ -538,11 +517,7 @@ class Stocks extends AlphaVantageBase
         return ['results' => $data[0]];
     }
 
-    /**
-     * Get Resource
-     * @param int $displayId
-     * @return mixed
-     */
+    /** @inheritdoc */
     public function getResource($displayId = 0)
     {        
         $data = [];
@@ -602,11 +577,8 @@ class Stocks extends AlphaVantageBase
             'numItems' => count($renderedItems),
             'originalWidth' => $this->region->width,
             'originalHeight' => $this->region->height,
-            'previewWidth' => $this->getSanitizer()->getDouble('width', 0),
-            'previewHeight' => $this->getSanitizer()->getDouble('height', 0),
             'widgetDesignWidth' => $widgetOriginalWidth,
             'widgetDesignHeight'=> $widgetOriginalHeight,
-            'scaleOverride' => $this->getSanitizer()->getDouble('scale_override', 0), 
             'maxItemsPerPage' => $maxItemsPerPage
         );
 
@@ -671,13 +643,20 @@ class Stocks extends AlphaVantageBase
         return $this->renderTemplate($data);
     }
 
+    /** @inheritdoc */
     public function isValid()
     {
-        // Using the information you have in your module calculate whether it is valid or not.
-        // 0 = Invalid
-        // 1 = Valid
-        // 2 = Unknown
-        return 1;
+        if ($this->getOption('overrideTemplate') == 0 && ( $this->getOption('templateId') == '' || $this->getOption('templateId') == null))
+            throw new InvalidArgumentException(__('Please choose a template'), 'templateId');
+
+        if ($this->getUseDuration() == 1 && $this->getDuration() == 0)
+            throw new InvalidArgumentException(__('Please enter a duration'), 'duration');
+
+        // Validate for the items field
+        if ($this->getOption('items') == '')
+            throw new InvalidArgumentException(__('Please provide a comma separated list of symbols in the items field.'), 'items');
+
+        return self::$STATUS_VALID;
     }
 
     /** @inheritdoc */

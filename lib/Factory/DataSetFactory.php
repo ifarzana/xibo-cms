@@ -156,7 +156,7 @@ class DataSetFactory extends BaseFactory
      */
     public function getByName($dataSet, $userId = null)
     {
-        $dataSets = $this->query(null, ['dataSet' => $dataSet, 'userId' => $userId]);
+        $dataSets = $this->query(null, ['dataSetExact' => $dataSet, 'userId' => $userId]);
 
         if (count($dataSets) <= 0)
             throw new NotFoundException();
@@ -174,42 +174,34 @@ class DataSetFactory extends BaseFactory
         $entries = array();
         $params = array();
 
+        if ($sortOrder === null) {
+            $sortOrder = ['dataSet'];
+        }
+
         $select  = '
           SELECT dataset.dataSetId,
             dataset.dataSet,
             dataset.description,
             dataset.userId,
             dataset.lastDataEdit,
-        ';
-
-        if (DBVERSION > 122) {
-            $select .= '
-                dataset.`code`,
-                dataset.`isLookup`,
-            ';
-        }
-
-        if (DBVERSION > 134) {
-            $select .= '
-                dataset.`isRemote`,
-                dataset.`method`,
-                dataset.`uri`,
-                dataset.`postData`,
-                dataset.`authentication`,
-                dataset.`username`,
-                dataset.`password`,
-                dataset.`refreshRate`,
-                dataset.`clearRate`,
-                dataset.`runsAfter`,
-                dataset.`dataRoot`,
-                dataset.`summarize`,
-                dataset.`summarizeField`,
-                dataset.`lastSync`,
-                dataset.`lastClear`,
-            ';
-        }
-
-        $select .= '
+            dataset.`code`,
+            dataset.`isLookup`,
+            dataset.`isRemote`,
+            dataset.`method`,
+            dataset.`uri`,
+            dataset.`postData`,
+            dataset.`authentication`,
+            dataset.`username`,
+            dataset.`password`,
+            dataset.`customHeaders`,
+            dataset.`refreshRate`,
+            dataset.`clearRate`,
+            dataset.`runsAfter`,
+            dataset.`dataRoot`,
+            dataset.`summarize`,
+            dataset.`summarizeField`,
+            dataset.`lastSync`,
+            dataset.`lastClear`,
             user.userName AS owner,
             (
               SELECT GROUP_CONCAT(DISTINCT `group`.group)
@@ -250,28 +242,13 @@ class DataSetFactory extends BaseFactory
         }
 
         if ($this->getSanitizer()->getString('dataSet', $filterBy) != null) {
-        // convert into a space delimited array
-            $names = explode(' ', $this->getSanitizer()->getString('dataSet', $filterBy));
+            $terms = explode(',', $this->getSanitizer()->getString('dataSet', $filterBy));
+            $this->nameFilter('dataset', 'dataSet', $terms, $body, $params);
+        }
 
-            $i = 0;
-            foreach($names as $searchName)
-            {
-                $i++;
-
-                // Ignore if the word is empty
-                if($searchName == '')
-                  continue;
-
-                // Not like, or like?
-                if (substr($searchName, 0, 1) == '-') {
-                    $body.= " AND  `dataset`.dataSet NOT LIKE :search$i ";
-                    $params['search' . $i] = '%' . ltrim($searchName) . '%';
-                }
-                else {
-                    $body.= " AND  `dataset`.dataSet LIKE :search$i ";
-                    $params['search' . $i] = '%' . $searchName . '%';
-                }
-            }
+        if ($this->getSanitizer()->getString('dataSetExact', $filterBy) != '') {
+            $body.= " AND dataset.dataSet = :exact ";
+            $params['exact'] = $this->getSanitizer()->getString('dataSetExact', $filterBy);
         }
 
         if ($this->getSanitizer()->getString('code', $filterBy) != null) {
@@ -294,7 +271,7 @@ class DataSetFactory extends BaseFactory
 
         foreach ($this->getStore()->select($sql, $params) as $row) {
             $entries[] = $this->createEmpty()->hydrate($row, [
-                'intProperties' => ['isLookup', 'isRemote']
+                'intProperties' => ['isLookup', 'isRemote', 'clearRate', 'refreshRate', 'lastDataEdit', 'runsAfter', 'lastSync', 'lastClear']
             ]);
         }
 
@@ -367,12 +344,21 @@ class DataSetFactory extends BaseFactory
                     break;
 
                 case 'bearer':
-                    $requestParams['headers'] = ['Authorization' => 'Bearer ' . $dataSet->authentication];
+                    $requestParams['headers'] = ['Authorization' => 'Bearer ' . $dataSet->password];
                     break;
 
                 case 'none':
                 default:
                     $this->getLog()->debug('No authentication required');
+            }
+
+            if (isset($dataSet->customHeaders)) {
+                $arrayOfCustomHeaders = array_filter(explode(',', $dataSet->customHeaders));
+
+                foreach ($arrayOfCustomHeaders as $customHeader) {
+                    $header = array_filter(explode(':', $customHeader));
+                    $requestParams['headers'][$header[0]] = $header[1];
+                }
             }
 
             // Post request?
@@ -613,6 +599,7 @@ class DataSetFactory extends BaseFactory
      * @param array $entry The Data from the remote system
      * @param DataSetColumn[] $dataSetColumns The configured Columns form the current DataSet
      * @return array The processed $entry as a List of Fields from $columns
+     * @throws InvalidArgumentException
      */
     private function processEntry(array $entry, array $dataSetColumns) {
         $result = [];
@@ -638,17 +625,27 @@ class DataSetFactory extends BaseFactory
                 $this->getLog()->debug('Resolved value: ' . var_export($value, true));
 
                 // Only add it to the result if we where able to process the field
-                if (($value != null) && ($value[1] != null)) {
+                if (($value != null) && ($value[1] !== null)) {
                     switch ($column->dataTypeId) {
                         case 2:
                             $result[$column->heading] = $this->getSanitizer()->double($value[1]);
                             break;
                         case 3:
                             // This expects an ISO date
-                            $result[$column->heading] = $this->getSanitizer()->getDate($value[1]);
+                            $date = $this->getSanitizer()->string($value[1]);
+                            try {
+                                $result[$column->heading] = $this->date->parse($date);
+                            } catch (\Exception $e) {
+                                $this->getLog()->error('Incorrect date provided ' . $date . ' Expected date format Y-m-d H:i:s ');
+                                throw new InvalidArgumentException('Incorrect date provided ' . $date . ' Expected date format Y-m-d H:i:s ', 'date');
+                            }
                             break;
                         case 5:
                             $result[$column->heading] = $this->getSanitizer()->int($value[1]);
+                            break;
+                        case 6:
+                            // HTML, without any sanitization
+                            $result[$column->heading] = $value[1];
                             break;
                         default:
                             $result[$column->heading] = $this->getSanitizer()->string($value[1]);

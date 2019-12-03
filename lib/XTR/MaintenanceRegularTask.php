@@ -7,6 +7,15 @@
 
 
 namespace Xibo\XTR;
+use Xibo\Controller\Display;
+use Xibo\Controller\Library;
+use Xibo\Exception\XiboException;
+use Xibo\Factory\DisplayFactory;
+use Xibo\Factory\LayoutFactory;
+use Xibo\Factory\ModuleFactory;
+use Xibo\Factory\NotificationFactory;
+use Xibo\Factory\PlaylistFactory;
+use Xibo\Factory\UserGroupFactory;
 use Xibo\Helper\ByteFormatter;
 use Xibo\Helper\WakeOnLan;
 
@@ -17,6 +26,45 @@ use Xibo\Helper\WakeOnLan;
 class MaintenanceRegularTask implements TaskInterface
 {
     use TaskTrait;
+
+    /** @var Display */
+    private $displayController;
+
+    /** @var Library */
+    private $libraryController;
+
+    /** @var DisplayFactory */
+    private $displayFactory;
+
+    /** @var NotificationFactory */
+    private $notificationFactory;
+
+    /** @var UserGroupFactory */
+    private $userGroupFactory;
+
+    /** @var LayoutFactory */
+    private $layoutFactory;
+
+    /** @var PlaylistFactory */
+    private $playlistFactory;
+
+    /** @var ModuleFactory */
+    private $moduleFactory;
+
+    /** @inheritdoc */
+    public function setFactories($container)
+    {
+        $this->displayController = $container->get('\Xibo\Controller\Display');
+        $this->libraryController = $container->get('\Xibo\Controller\Library');
+
+        $this->displayFactory = $container->get('displayFactory');
+        $this->notificationFactory = $container->get('notificationFactory');
+        $this->userGroupFactory = $container->get('userGroupFactory');
+        $this->layoutFactory = $container->get('layoutFactory');
+        $this->playlistFactory = $container->get('playlistFactory');
+        $this->moduleFactory = $container->get('moduleFactory');
+        return $this;
+    }
 
     /** @inheritdoc */
     public function run()
@@ -29,6 +77,8 @@ class MaintenanceRegularTask implements TaskInterface
 
         $this->wakeOnLan();
 
+        $this->updatePlaylistDurations();
+
         $this->buildLayouts();
 
         $this->tidyLibrary();
@@ -36,6 +86,8 @@ class MaintenanceRegularTask implements TaskInterface
         $this->checkLibraryUsage();
 
         $this->checkOverRequestedFiles();
+
+        $this->publishLayouts();
     }
 
     /**
@@ -46,7 +98,7 @@ class MaintenanceRegularTask implements TaskInterface
     {
         $this->runMessage .= '## ' . __('Email Alerts') . PHP_EOL;
 
-        $this->app->container->get('\Xibo\Controller\Display')->setApp($this->app)->validateDisplays($this->displayFactory->query());
+        $this->displayController->validateDisplays($this->displayFactory->query());
 
         $this->appendRunMessage(__('Done'));
     }
@@ -56,7 +108,7 @@ class MaintenanceRegularTask implements TaskInterface
      */
     private function licenceSlotValidation()
     {
-        $maxDisplays = $this->config->GetSetting('MAX_LICENSED_DISPLAYS');
+        $maxDisplays = $this->config->getSetting('MAX_LICENSED_DISPLAYS');
 
         if ($maxDisplays > 0) {
             $this->runMessage .= '## ' . __('Licence Slot Validation') . PHP_EOL;
@@ -74,6 +126,8 @@ class MaintenanceRegularTask implements TaskInterface
                     // We need to un-licence some displays
                     $difference = count($displays) - $maxDisplays;
 
+                    $this->log->alert('Max %d authorised displays exceeded, we need to un-authorise %d of %d displays', $maxDisplays, $difference, count($displays));
+
                     $update = $dbh->prepare('UPDATE `display` SET licensed = 0 WHERE displayId = :displayId');
 
                     foreach ($displays as $display) {
@@ -82,8 +136,10 @@ class MaintenanceRegularTask implements TaskInterface
                         if ($difference == 0)
                             break;
 
-                        echo sprintf(__('Disabling %s'), $this->sanitizer->string($display['display'])) . '<br/>' . PHP_EOL;
+                        $this->appendRunMessage(sprintf(__('Disabling %s'), $this->sanitizer->string($display['display'])));
                         $update->execute(['displayId' => $display['displayId']]);
+
+                        $this->log->audit('Display', $display['displayId'], 'Regular Maintenance unauthorised display due to max number of slots exceeded.', ['display' => $display['display']]);
 
                         $difference--;
                     }
@@ -117,8 +173,11 @@ class MaintenanceRegularTask implements TaskInterface
                     // Client should be awake, so has this displays WOL time been passed
                     if ($display->lastWakeOnLanCommandSent < $timeToWake) {
                         // Call the Wake On Lan method of the display object
-                        if ($display->macAddress == '' || $display->broadCastAddress == '')
-                            throw new \InvalidArgumentException(__('This display has no mac address recorded against it yet. Make sure the display is running.'));
+                        if ($display->macAddress == '' || $display->broadCastAddress == '') {
+                            $this->log->error('This display has no mac address recorded against it yet. Make sure the display is running.');
+                            $this->runMessage .= ' - ' . $display->display . ' Did not send MAC address yet' . PHP_EOL;
+                            continue;
+                        }
 
                         $this->log->notice('About to send WOL packet to ' . $display->broadCastAddress . ' with Mac Address ' . $display->macAddress);
 
@@ -158,7 +217,7 @@ class MaintenanceRegularTask implements TaskInterface
         $this->runMessage .= '## ' . __('Build Layouts') . PHP_EOL;
 
         // Build Layouts
-        foreach ($this->layoutFactory->query(null, ['status' => 3]) as $layout) {
+        foreach ($this->layoutFactory->query(null, ['status' => 3, 'showDrafts' => 1]) as $layout) {
             /* @var \Xibo\Entity\Layout $layout */
             try {
                 $layout->xlfToDisk(['notify' => true]);
@@ -182,10 +241,8 @@ class MaintenanceRegularTask implements TaskInterface
         $this->runMessage .= '## ' . __('Tidy Library') . PHP_EOL;
 
         // Keep tidy
-        /** @var \Xibo\Controller\Library $libraryController */
-        $libraryController = $this->app->container->get('\Xibo\Controller\Library');
-        $libraryController->removeExpiredFiles();
-        $libraryController->removeTempFiles();
+        $this->libraryController->removeExpiredFiles();
+        $this->libraryController->removeTempFiles();
 
         $this->runMessage .= ' - Done' . PHP_EOL . PHP_EOL;
     }
@@ -195,7 +252,7 @@ class MaintenanceRegularTask implements TaskInterface
      */
     private function checkLibraryUsage()
     {
-        $libraryLimit = $this->config->GetSetting('LIBRARY_SIZE_LIMIT_KB') * 1024;
+        $libraryLimit = $this->config->getSetting('LIBRARY_SIZE_LIMIT_KB') * 1024;
 
         if ($libraryLimit <= 0)
             return;
@@ -277,5 +334,91 @@ class MaintenanceRegularTask implements TaskInterface
                 $this->log->critical($subject);
             }
         }
+    }
+
+    /**
+     * Update Playlist Durations
+     */
+    private function updatePlaylistDurations()
+    {
+        $this->runMessage .= '## ' . __('Playlist Duration Updates') . PHP_EOL;
+
+        // Build Layouts
+        foreach ($this->playlistFactory->query(null, ['requiresDurationUpdate' => 1]) as $playlist) {
+            try {
+                $playlist->setModuleFactory($this->moduleFactory);
+                $playlist->updateDuration();
+            } catch (XiboException $xiboException) {
+                $this->log->error('Maintenance cannot update Playlist ' . $playlist->playlistId . ', ' . $xiboException->getMessage());
+            }
+        }
+
+        $this->runMessage .= ' - Done' . PHP_EOL . PHP_EOL;
+    }
+
+    /**
+     * Publish layouts with set publishedDate
+     * @throws \Xibo\Exception\NotFoundException
+     * @throws XiboException
+     */
+    private function publishLayouts()
+    {
+        $this->runMessage .= '## ' . __('Publishing layouts with set publish dates') . PHP_EOL;
+
+        $layouts = $this->layoutFactory->query(null, ['havePublishDate' => 1]);
+
+        // check if we have any layouts with set publish date
+        if (count($layouts) > 0) {
+
+            foreach ($layouts as $layout) {
+
+                // check if the layout should be published now according to the date
+                if ($this->date->parse($layout->publishedDate)->format('U') < $this->date->getLocalDate(null, 'U')) {
+                    try {
+                        // check if draft is valid
+                        if ($layout->status === 4 && isset($layout->statusMessage)) {
+                            throw new XiboException(__($layout->statusMessage));
+                        } else {
+                            // publish the layout
+                            $draft = $this->layoutFactory->getByParentId($layout->layoutId);
+                            $draft->publishDraft();
+                            $draft->load();
+                            $draft->xlfToDisk(['notify' => true, 'exceptionOnError' => true]);
+
+                            $this->log->info('Published layout ID ' . $layout->layoutId . ' new layout id is ' . $draft->layoutId);
+                        }
+                    } catch (XiboException $e) {
+                        $this->log->error('Error publishing layout ID ' . $layout->layoutId . ' Failed with message: ' . $e->getMessage());
+
+                        // create a notification
+                        $subject = __(sprintf('Error publishing layout ID %d', $layout->layoutId));
+                        $date = $this->date->parse();
+
+                        if (count($this->notificationFactory->getBySubjectAndDate($subject,
+                                $this->date->getLocalDate($date->startOfDay(), 'U'),
+                                $this->date->getLocalDate($date->addDay(1)->startOfDay(), 'U'))) <= 0) {
+
+                            $body = __(sprintf('Publishing layout ID %d failed. With message %s', $layout->layoutId,
+                                $e->getMessage()));
+
+                            $notification = $this->notificationFactory->createSystemNotification(
+                                $subject,
+                                $body,
+                                $this->date->parse()
+                            );
+                            $notification->save();
+
+                            $this->log->critical($subject);
+                        }
+                    }
+                } else {
+                    $this->log->debug('Layouts with published date were found, they are set to publish later than current time');
+                }
+            }
+        } else {
+            $this->log->debug('No layouts to publish.');
+        }
+
+        $this->runMessage .= ' - Done' . PHP_EOL . PHP_EOL;
     }
 }

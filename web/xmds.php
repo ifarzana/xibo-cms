@@ -78,7 +78,7 @@ $version = $app->sanitizerService->getInt('v', 3, $_REQUEST);
 
 // Version Request?
 if (isset($_GET['what']))
-    die($app->configService->Version('XmdsVersion'));
+    die(\Xibo\Helper\Environment::$XMDS_VERSION);
 
 // Is the WSDL being requested.
 if (isset($_GET['wsdl']) || isset($_GET['WSDL'])) {
@@ -111,10 +111,10 @@ $app->view($twig);
 if (isset($_GET['file'])) {
 
     // Check send file mode is enabled
-    $sendFileMode = $app->configService->GetSetting('SENDFILE_MODE');
+    $sendFileMode = $app->configService->getSetting('SENDFILE_MODE');
 
     if ($sendFileMode == 'Off') {
-        $app->logService->notice('HTTP GetFile request received but SendFile Mode is Off. Issuing 404', 'services');
+        $app->logService->notice('HTTP GetFile request received but SendFile Mode is Off. Issuing 404');
         header('HTTP/1.0 404 Not Found');
         exit;
     }
@@ -163,20 +163,24 @@ if (isset($_GET['file'])) {
             $app->logService->info('Delete request for ' . $file->path);
 
             // Log bandwith here if we are a CDN
-            $logBandwidth = ($app->configService->GetSetting('CDN_URL') != '');
+            $logBandwidth = ($app->configService->getSetting('CDN_URL') != '');
 
         } else {
+            // Check that we've not used all of our bandwidth already (if we have an allowance)
+            if ($app->bandwidthFactory->isBandwidthExceeded($app->configService->GetSetting('MONTHLY_XMDS_TRANSFER_LIMIT_KB'))) {
+                throw new \Xibo\Exception\InstanceSuspendedException('Bandwidth Exceeded');
+            }
 
             // Log bandwidth here if we are NOT a CDN
-            $logBandwidth = ($app->configService->GetSetting('CDN_URL') == '');
+            $logBandwidth = ($app->configService->getSetting('CDN_URL') == '');
 
             // Most likely a Get Request
             // Issue magic packet
-            $app->logService->info('HTTP GetFile request redirecting to ' . $app->configService->GetSetting('LIBRARY_LOCATION') . $file->path);
+            $app->logService->info('HTTP GetFile request redirecting to ' . $app->configService->getSetting('LIBRARY_LOCATION') . $file->path);
 
             // Send via Apache X-Sendfile header?
             if ($sendFileMode == 'Apache') {
-                header('X-Sendfile: ' . $app->configService->GetSetting('LIBRARY_LOCATION') . $file->path);
+                header('X-Sendfile: ' . $app->configService->getSetting('LIBRARY_LOCATION') . $file->path);
             } // Send via Nginx X-Accel-Redirect?
             else if ($sendFileMode == 'Nginx') {
                 header('X-Accel-Redirect: /download/' . $file->path);
@@ -232,6 +236,7 @@ try {
         $logProcessor,
         $app->pool,
         $app->store,
+        $app->timeSeriesStore,
         $app->logService,
         $app->dateService,
         $app->sanitizerService,
@@ -249,7 +254,8 @@ try {
         $app->notificationFactory,
         $app->displayEventFactory,
         $app->scheduleFactory,
-        $app->dayPartFactory
+        $app->dayPartFactory,
+        $app->playerVersionFactory
     );
     $soap->handle();
 

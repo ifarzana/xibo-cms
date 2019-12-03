@@ -7,7 +7,8 @@
 
 namespace Xibo\Widget;
 
-use Xibo\Exception\XiboException;
+use Respect\Validation\Validator as v;
+use Xibo\Exception\InvalidArgumentException;
 
 /**
  * Class Pdf
@@ -15,6 +16,16 @@ use Xibo\Exception\XiboException;
  */
 class Pdf extends ModuleWidget
 {
+
+    /**
+     * Javascript functions for the layout designer
+     */
+    public function layoutDesignerJavaScript()
+    {
+        // We use the same javascript as the data set view designer
+        return 'pdf-designer-javascript';
+    }
+
     /**
      * Install Files
      */
@@ -26,13 +37,21 @@ class Pdf extends ModuleWidget
     }
 
     /**
-     * Edit a pdf Widget
-     * @SWG\Post(
-     *  path="/playlist/widget/pdf/{playlistId}",
+     * Edit PDF Widget
+     *
+     * @SWG\Put(
+     *  path="/playlist/widget/{widgetId}?pdf",
      *  operationId="WidgetPdfEdit",
      *  tags={"widget"},
      *  summary="Parameters for editing existing pdf on a layout",
      *  description="Parameters for editing existing pdf on a layout, for adding new files, please refer to POST /library documentation",
+     *  @SWG\Parameter(
+     *      name="widgetId",
+     *      in="path",
+     *      description="The WidgetId to Edit",
+     *      type="integer",
+     *      required=true
+     *   ),
      *  @SWG\Parameter(
      *      name="name",
      *      in="formData",
@@ -54,17 +73,20 @@ class Pdf extends ModuleWidget
      *      type="integer",
      *      required=false
      *  ),
+     *  @SWG\Parameter(
+     *      name="enableStat",
+     *      in="formData",
+     *      description="The option (On, Off, Inherit) to enable the collection of Widget Proof of Play statistics",
+     *      type="string",
+     *      required=false
+     *   ),
      *  @SWG\Response(
-     *      response=201,
-     *      description="successful operation",
-     *      @SWG\Schema(ref="#/definitions/Widget"),
-     *      @SWG\Header(
-     *          header="Location",
-     *          description="Location of the new widget",
-     *          type="string"
-     *      )
+     *      response=204,
+     *      description="successful operation"
      *  )
      * )
+     *
+     * @throws \Xibo\Exception\XiboException
      */
     public function edit()
     {
@@ -72,27 +94,22 @@ class Pdf extends ModuleWidget
         $this->setUseDuration($this->getSanitizer()->getCheckbox('useDuration'));
         $this->setDuration($this->getSanitizer()->getInt('duration', $this->getDuration()));
         $this->setOption('name', $this->getSanitizer()->getString('name'));
+        $this->setOption('enableStat', $this->getSanitizer()->getString('enableStat'));
 
-
+        $this->isValid();
         $this->saveWidget();
     }
 
-    /**
-     * Is this module valid
-     * @return int
-     */
+    /** @inheritdoc */
     public function isValid()
     {
-        // Yes
-        return 1;
+        if ($this->getUseDuration() == 1 && !v::intType()->min(1)->validate($this->getDuration()))
+            throw new InvalidArgumentException(__('You must enter a duration.'), 'duration');
+
+        return self::$STATUS_VALID;
     }
 
-    /**
-     * Get Resource
-     * @param int $displayId
-     * @return mixed
-     * @throws XiboException
-     */
+    /** @inheritdoc */
     public function getResource($displayId = 0)
     {
         $data = [];
@@ -116,9 +133,8 @@ class Pdf extends ModuleWidget
             'durationIsPerItem' => false,
             'originalWidth' => $this->region->width,
             'originalHeight' => $this->region->height,
-            'previewWidth' => $this->getSanitizer()->getDouble('width', 0),
-            'previewHeight' => $this->getSanitizer()->getDouble('height', 0),
-            'scaleOverride' => $this->getSanitizer()->getDouble('scale_override', 0)
+            'previewWidth' => intval($this->getSanitizer()->getDouble('width')),
+            'previewHeight' => intval($this->getSanitizer()->getDouble('height'))
         );
 
         // File name?
@@ -143,8 +159,8 @@ class Pdf extends ModuleWidget
     /** @inheritdoc */
     public function getCacheDuration()
     {
-        // We have a short cache duration because this module doesn't rely on any external sources and we're just
+        // We have a long cache duration because this module doesn't rely on any external sources and we're just
         // creating some HTML.
-        return 1;
+        return 86400 * 365;
     }
 }

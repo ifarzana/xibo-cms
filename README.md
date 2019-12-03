@@ -1,8 +1,21 @@
 # Introduction
-Xibo - Digital Signage - http://www.xibo.org.uk
-Copyright (C) 2006-2018 Spring Signage Ltd and Contributors.
+Xibo - Digital Signage - https://xibo.org.uk
+Copyright (C) 2006-2019 Xibo Signage Ltd and Contributors.
 
-This is the **development branch** and represents the next generation of the Xibo CMS.
+
+
+#### Branches
+
+- develop: Work in progress toward 2.3
+- master: Currently 2.2
+- release22: Bug fixes for 2.2
+- release21: Bug fixes for 2.1
+- release20: Bug fixes for 2.0
+- release18: Work in progress toward the next 1.8
+- release17: Archive of 1.7
+- release1.6.4: Archive of 1.6
+
+
 
 ## Licence
 Xibo is free software: you can redistribute it and/or modify it under the terms of the GNU Affero General Public License as published by the Free Software Foundation, either version 3 of the License, or
@@ -16,7 +29,7 @@ You should have received a copy of the GNU Affero General Public License along w
 
 # Installation
 
-Installing an official release is [described in the manual](http://xibo.org.uk/manual/en/install_cms.html) and in the official release notes of each release.
+Installing an official release is [described in the manual](http://xibo.org.uk/manual/en/install_cms.html) and in the release notes of each release.
 
 
 
@@ -24,7 +37,7 @@ Installing an official release is [described in the manual](http://xibo.org.uk/m
 
 **Please only install a Development environment if you intend make code changes to Xibo. Installing from the repository is not suitable for a production installation.**
 
-Xibo uses Docker to ensure all contributers have a repeatable development environment which is easy to get up and running.
+Xibo uses Docker to ensure all contributors have a repeatable development environment which is easy to get up and running.
 
 The very same Docker containers are used in our recommended end user installation to promote consistency from development to deployment.
 
@@ -63,12 +76,32 @@ Change into your new folder
 cd xibo-cms
 ```
 
-Install the external dependencies with Composer. Your local machine is unlikely to have the necessary dependencies to install the packages, hence the `--ignore` switch.
+We recommend installing the dependencies via Docker, so that you are guarenteed consistent dependencies across different development machines.
 
-```sh
-php composer.phar install --ignore-platform-reqs
+### PHP dependencies
+
+```bash
+docker run --interactive --tty --volume $PWD:/app --volume ~/.composer:/tmp composer install
 ```
 
+This command also mounts the Composer `/tmp` folder into your home directory so that you can take advantage of Composer caching.
+
+### Website dependencies (webpack)
+
+```bash
+docker run -it --volume $PWD:/app --volume ~/.npm:/root/.npm -w /app node:latest sh -c "npm install webpack -g; npm install; npm run build;"
+```
+
+### Mapped Volumes
+
+The development version of Xibo expects the code base to be mapped into the container such that changes on the host
+are reflected in the container.
+
+However, the container itself creates some files, such as the twig cache and library uploads. These locations will need
+to be created and the container given access to them.
+
+The easiest way to do this is to make the `cache` and `library` folders and `chmod 777` them. Obviously this is not
+suitable for production, but you shouldn't be using these files for production (we have containers for that).
 
 
 ## Bring up the Containers
@@ -79,18 +112,50 @@ Use Docker Compose to bring up the containers.
 docker-compose up --build -d
 ```
 
-This will create a model installation with a DB container holding the `cms` database, mapped to external port 3315, a XMR container and a WEB container which maps the working directory into `/var/www/cms`, which is inturn served by Apache.
+## Login
+After the containers have come up you should be able to login with the details:
 
-Editing files in your favourite editor on your host file system will cause them to be updated inside the web container.
-
-Your database is persisted in `/containers/db` and will survive reboots, etc.
-
+U: `xibo_admin`
+P: `password`
 
 
+## Translations
+To parse the translations:
+
+```bash
+rm -R ./cache
+docker-compose exec web sh -c "cd /var/www/cms; php bin/locale.php"
+```
+
+```bash
+find ./locale ./cache ./lib ./web  -iname "*.php" -print0 | xargs -0 xgettext --from-code=UTF-8 -k_e -k_x -k__ -o locale/default.pot
+```
+
+To import translations:
+
+```bash
+bzr pull lp:~dangarner/xibo/swift-translations
+```
+
+Convert to `mo` format:
+
+```bash
+for i in *.po; do msgfmt "$i" -o $(echo $i | sed s/po/mo/); done
+```
+
+Move the resulting `mo` files into your `locale` folder.
+
+## Swagger API Docs
+To generate a `swagger.json` file, with the dev containers running:
+
+```bash
+docker-compose exec web sh -c "cd /var/www/cms; vendor/bin/swagger lib -o web/swagger.json"
+```
 
 # Application Structure
 
-To find out more about the application code and how everything fits together, please refer to the [advanced section of the manual](https://xibo.org.uk/manual/en/advanced.html).
+To find out more about the application code and how everything fits together, please refer to 
+the [developer docs](https://xibo.org.uk/docs/developer).
 
 
 
@@ -99,7 +164,8 @@ To find out more about the application code and how everything fits together, pl
 The standard licence for Xibo is the [AGPLv3](LICENSE). For more information please see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 
-
 # Reporting Problems
 
-Support requests can be reported on the [Xibo Community Forum](https://community.xibo.org.uk/c/dev). Verified, re-producable bugs with this repository can be reported in the [Xibo parent repository](https://github.com/xibosignage/xibo/issues).
+Support requests can be reported on the [Xibo Community Forum](https://community.xibo.org.uk/c/dev). Verified, 
+re-producable bugs with this repository can be reported in 
+the [Xibo parent repository](https://github.com/xibosignage/xibo/issues).

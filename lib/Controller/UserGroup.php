@@ -655,7 +655,7 @@ class UserGroup extends Base
      *      name="userGroupId",
      *      in="path",
      *      description="ID of the user group to which assign the user",
-     *      type="string",
+     *      type="integer",
      *      required=true
      *   ),
      *  @SWG\Parameter(
@@ -683,6 +683,7 @@ class UserGroup extends Base
         $this->getLog()->debug('Assign User for groupId %d', $groupId);
 
         $group = $this->userGroupFactory->getById($groupId);
+        $group->load();
 
         if (!$this->isEditable($group))
             throw new AccessDeniedException();
@@ -699,6 +700,7 @@ class UserGroup extends Base
                 throw new AccessDeniedException(__('Access Denied to User'));
 
             $group->assignUser($user);
+            $group->save(['validate' => false]);
         }
 
         // Check to see if unassign has been provided.
@@ -714,9 +716,9 @@ class UserGroup extends Base
                 throw new AccessDeniedException(__('Access Denied to User'));
 
             $group->unassignUser($user);
+            $group->save(['validate' => false]);
         }
 
-        $group->save(['validate' => false]);
 
         // Return
         $this->getState()->hydrate([
@@ -737,7 +739,7 @@ class UserGroup extends Base
      *      name="userGroupId",
      *      in="path",
      *      description="ID of the user group from which to unassign the user",
-     *      type="string",
+     *      type="integer",
      *      required=true
      *   ),
      *  @SWG\Parameter(
@@ -785,6 +787,7 @@ class UserGroup extends Base
     /**
      * Form to Copy Group
      * @param int $groupId
+     * @throws \Xibo\Exception\NotFoundException
      */
     function copyForm($groupId)
     {
@@ -867,7 +870,7 @@ class UserGroup extends Base
         }
 
         $this->getState()->hydrate([
-            'httpStatus' => 204,
+            'httpStatus' => 201,
             'message' => sprintf(__('Copied %s'), $group->group),
             'id' => $newGroup->groupId,
             'data' => $newGroup

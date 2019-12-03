@@ -90,13 +90,13 @@ class DataSetColumn implements \JsonSerializable
      * @SWG\Property(description="Does this column show a filter on the data entry page?")
      * @var string
      */
-    public $showFilter;
+    public $showFilter = 0;
 
     /**
      * @SWG\Property(description="Does this column allow a sorting on the data entry page?")
      * @var string
      */
-    public $showSort;
+    public $showSort = 0;
 
     /**
      * @SWG\Property(description="The column type for this Column")
@@ -177,6 +177,10 @@ class DataSetColumn implements \JsonSerializable
         if (!v::stringType()->alnum()->validate($this->heading) || strtolower($this->heading) == 'id')
             throw new InvalidArgumentException(__('Please provide an alternative column heading %s can not be used.', $this->heading), 'heading');
 
+        if ($this->dataSetColumnTypeId == 2 && $this->formula == '') {
+            throw new InvalidArgumentException(__('Please enter a valid formula'), 'formula');
+        }
+
         // Make sure this column name is unique
         $columns = $this->dataSetColumnFactory->getByDataSetId($this->dataSetId);
 
@@ -233,6 +237,17 @@ class DataSetColumn implements \JsonSerializable
 
             if ($sth->fetch())
                 throw new InvalidArgumentException(__('New list content value is invalid as it does not include values for existing data'), 'listcontent');
+        }
+
+        // if formula dataSetType is set and formula is not empty, try to execute the SQL to validate it - we're ignoring client side formulas here.
+        if ($this->dataSetColumnTypeId == 2 && $this->formula != '' && substr($this->formula, 0, 1) !== '$') {
+           try {
+               $formula = str_replace('[DisplayId]', 0, $this->formula);
+               $this->getStore()->select('SELECT * FROM (SELECT `id`, ' . $formula . ' AS `' . $this->heading . '`  FROM `dataset_' . $this->dataSetId . '`) dataset WHERE 1 = 1 ', []);
+           } catch (\Exception $e) {
+               $this->getLog()->debug('Formula validation failed with following message ' . $e->getMessage());
+               throw new InvalidArgumentException(__('Provided formula is invalid'), 'formula');
+           }
         }
     }
 
@@ -309,7 +324,10 @@ class DataSetColumn implements \JsonSerializable
             'columnOrder' => $this->columnOrder,
             'dataSetColumnTypeId' => $this->dataSetColumnTypeId,
             'formula' => $this->formula,
-            'dataSetColumnId' => $this->dataSetColumnId
+            'dataSetColumnId' => $this->dataSetColumnId,
+            'remoteField' => $this->remoteField,
+            'showFilter' => $this->showFilter,
+            'showSort' => $this->showSort
         ];
 
         $sql = '
@@ -320,21 +338,12 @@ class DataSetColumn implements \JsonSerializable
             ColumnOrder = :columnOrder,
             DataTypeID = :dataTypeId,
             DataSetColumnTypeID = :dataSetColumnTypeId,
-            Formula = :formula
+            Formula = :formula,
+            RemoteField = :remoteField, 
+            `showFilter` = :showFilter, 
+            `showSort` = :showSort
+         WHERE dataSetColumnId = :dataSetColumnId 
         ';
-
-        if (DBVERSION >= 135) {
-            $sql .= ', RemoteField = :remoteField ';
-            $params['remoteField'] = $this->remoteField;
-        }
-
-        if (DBVERSION >= 138) {
-            $sql .= ', `showFilter` = :showFilter, `showSort` = :showSort ';
-            $params['showFilter'] = $this->showFilter;
-            $params['showSort'] = $this->showSort;
-        }
-
-        $sql .= ' WHERE dataSetColumnId = :dataSetColumnId ';
 
         $this->getStore()->update($sql, $params);
 

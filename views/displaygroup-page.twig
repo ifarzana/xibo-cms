@@ -23,6 +23,9 @@
                 <div class="XiboFilter well">
                     <div class="FilterDiv" id="Filter">
                         <form class="form-inline">
+                            {% set title %}{% trans "ID" %}{% endset %}
+                            {{ inline.input("displayGroupId", title) }}
+
                             {% set title %}{% trans "Name" %}{% endset %}
                             {{ inline.input("displayGroup", title) }}
 
@@ -34,6 +37,7 @@
                                 { name: "data-placeholder--value", value: "" },
                                 { name: "data-search-url", value: urlFor("display.search") },
                                 { name: "data-search-term", value: "display" },
+                                { name: "data-search-term-tags", value: "tags" },
                                 { name: "data-id-property", value: "displayId" },
                                 { name: "data-text-property", value: "display" }
                             ] %}
@@ -48,8 +52,11 @@
                             {{ inline.input("dynamicCriteria", title) }}
 
                             {% set title %}{% trans "Tags" %}{% endset %}
-                            {% set helpText %}{% trans "A comma separated list of tags to filter by. Enter --no-tag to see items without tags." %}{% endset %}
+                            {% set helpText %}{% trans "A comma separated list of tags to filter by. Enter a Tag value preceded with | to filter by Tag values. Enter --no-tag to see items without tags." %}{% endset %}
                             {{ inline.inputWithTags("tags", title, null, helpText) }}
+
+                            {% set title %}{% trans "Exact match?" %}{% endset %}
+                            {{ inline.checkbox("exactTags", title) }}
                         </form>
                     </div>
                 </div>
@@ -62,8 +69,9 @@
                                 <th>{% trans "Description" %}</th>
                                 <th>{% trans "Is Dynamic?" %}</th>
                                 <th>{% trans "Criteria" %}</th>
+                                <th>{% trans "Criteria Tags" %}</th>
                                 <th>{% trans "Tags" %}</th>
-                                <th></th>
+                                <th>{% trans "Row Menu" %}</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -81,7 +89,7 @@
         var table = $("#displaygroups").DataTable({ "language": dataTablesLanguage,
             serverSide: true, stateSave: true, stateDuration: 0,
             stateLoadCallback: function (settings, callback) {
-                var data;
+                var data = {};
                 $.ajax({
                     type: "GET",
                     async: false,
@@ -126,6 +134,7 @@
                 { "data": "description" },
                 { "data": "isDynamic", "render": dataTableTickCrossColumn },
                 { "data": "dynamicCriteria" },
+                { "data": "dynamicCriteriaTags"},
                 {
                     "name": "tags",
                     "sortable": false,
@@ -143,15 +152,49 @@
         table.on('processing.dt', dataTableProcessing);
         dataTableAddButtons(table, $('#displaygroups_wrapper').find('.col-sm-6').eq(1));
 
-        var displayTable;
-        var criteria;
+        let displayTable;
+        let criteria;
+        let criteriaTag;
+
+        function setDeleteMultiSelectFormOpen(dialog) {
+            $(dialog).find('.save-button').prop('disabled', false);
+
+            var $input = $('<input type=checkbox id="confirmDelete" name="confirmDelete"> {% trans %} Check to confirm deletion {% endtrans %} </input>');
+            $input.on('change', function() {
+                $(dialog).find('.save-button').prop('disabled', !$(this).is(':checked'));
+            });
+            $(dialog).find('.modal-body').append($input);
+        }
+
+        function displayGroupAddFormNext() {
+            // Get form
+            var $form = $("#displayGroupAddForm");
+
+            // Set apply and apply reset data
+            $form.data("apply", true);
+            $form.data("applyCallback", 'applyResetCallback');
+
+            // Submit form
+            $form.submit();
+        }
+
+        function applyResetCallback(form) {
+            // Reset form fields
+            $(form).find('#displayGroup').val("");
+        }
 
         function displayGroupFormOpen(dialog) {
             displayTable = null;
 
-            $(dialog).find("input[name=dynamicCriteria]").on("keyup", $.debounce(500, function() {
+            $(dialog).find("input[name=dynamicCriteria]").on("keyup", _.debounce(function() {
                 displayGroupQueryDynamicMembers(dialog);
-            }));
+            }, 500));
+
+            $(dialog).find("input[name=dynamicCriteriaTags]").change(function() {
+                displayGroupQueryDynamicMembers(dialog);
+            });
+
+            const $form = $('#displayGroupAddForm');
 
             // First time in there
             displayGroupQueryDynamicMembers(dialog);
@@ -162,12 +205,13 @@
             if ($(dialog).find("input[name=isDynamic]")[0].checked) {
 
                 criteria = $(dialog).find("input[name=dynamicCriteria]").val();
+                criteriaTag = $(dialog).find("input[name=dynamicCriteriaTags]").val();
 
-                if (criteria == "") {
+                if (criteria === "" && criteriaTag === "") {
                     if (displayTable != null) {
                         displayTable.destroy();
                         displayTable = null;
-                        $("#displays tbody").empty();
+                        $("#displayGroupDisplays tbody").empty();
                     }
 
                     return;
@@ -176,7 +220,7 @@
                 if (displayTable != null) {
                     displayTable.ajax.reload();
                 } else {
-                    displayTable = $("#displays").DataTable({
+                    displayTable = $("#displayGroupDisplays").DataTable({
                         "language": dataTablesLanguage,
                         serverSide: true,
                         stateSave: true, stateDuration: 0,
@@ -186,13 +230,15 @@
                         ajax: {
                             "url": "{{ urlFor("display.search") }}",
                             "data": function (d) {
-                                console.log(criteria);
-                                $.extend(d, {display: criteria});
+                                //console.log(criteria);
+                                //console.log(criteriaTag);
+                                $.extend(d, {display: criteria, tags: criteriaTag});
                             }
                         },
                         "columns": [
                             {"data": "displayId"},
                             {"data": "display"},
+                            {"data": dataTableCreateTags},
                             {
                                 "data": "mediaInventoryStatus",
                                 "render": function (data, type, row) {
@@ -215,6 +261,7 @@
                     });
 
                     displayTable.on('processing.dt', dataTableProcessing);
+                    displayTable.on('draw', { form: $(".displayGroupForm") }, dataTableCreateTagEvents);
                 }
             }
         }
@@ -266,18 +313,14 @@
                     },
                     { "data": "loggedIn", "render": dataTableTickCrossColumn},
                     {
-                        "name": "clientVersion",
-                        "data": function (data, type) {
-                            if (type != "display")
-                                return data.clientVersion;
-
+                        "name": "clientSort",
+                        "data": function (data) {
                             return data.clientType + ' ' + data.clientVersion + '-' + data.clientCode;
                         },
                         "visible": false
                     },
                     {
                         "name": "member",
-                        "orderable": false,
                         "data": function (data, type, row) {
                             if (type != "display")
                                 return data;
@@ -328,7 +371,6 @@
                     { "data": "displayGroup"},
                     {
                         "name": "member",
-                        "orderable": false,
                         "data": function (data, type, row) {
                             if (type != "display")
                                 return data;

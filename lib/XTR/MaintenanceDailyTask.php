@@ -7,8 +7,10 @@
 
 
 namespace Xibo\XTR;
-use Xibo\Exception\ConfigurationException;
-use Xibo\Helper\Environment;
+use Xibo\Controller\Library;
+use Xibo\Exception\XiboException;
+use Xibo\Factory\LayoutFactory;
+use Xibo\Factory\UserFactory;
 
 /**
  * Class MaintenanceDailyTask
@@ -18,18 +20,28 @@ class MaintenanceDailyTask implements TaskInterface
 {
     use TaskTrait;
 
-    private $hasUpgradeRun = false;
+    /** @var LayoutFactory */
+    private $layoutFactory;
+
+    /** @var UserFactory */
+    private $userFactory;
+
+    /** @var Library */
+    private $libraryController;
+
+    /** @inheritdoc */
+    public function setFactories($container)
+    {
+        $this->libraryController = $container->get('\Xibo\Controller\Library');
+        $this->layoutFactory = $container->get('layoutFactory');
+        $this->userFactory = $container->get('userFactory');
+        return $this;
+    }
 
     /** @inheritdoc */
     public function run()
     {
         $this->runMessage = '# ' . __('Daily Maintenance') . PHP_EOL . PHP_EOL;
-
-        // Upgrade
-        $this->upgrade();
-
-        if ($this->hasUpgradeRun)
-            return;
 
         // Long running task
         set_time_limit(0);
@@ -43,94 +55,11 @@ class MaintenanceDailyTask implements TaskInterface
         // Tidy logs
         $this->tidyLogs();
 
-        // Tidy stats
-        $this->tidyStats();
-
         // Tidy Cache
         $this->tidyCache();
 
         // API tokens
         $this->purgeExpiredApiTokens();
-    }
-
-    /**
-     * Upgrade if required
-     * @throws ConfigurationException
-     */
-    private function upgrade()
-    {
-        // Is there a pending upgrade (i.e. are there any pending upgrade steps).
-        if ($this->config->isUpgradePending()) {
-            // Flag to indicate we've run upgrade steps
-            $this->hasUpgradeRun = true;
-
-            $this->runMessage .= '#' . __('Upgrade') . PHP_EOL;
-            $steps = $this->upgradeFactory->getIncomplete();
-
-            if (count($steps) <= 0) {
-
-                // Insert pending upgrade steps.
-                $steps = $this->upgradeFactory->createSteps(DBVERSION, Environment::$WEBSITE_VERSION);
-
-                foreach ($steps as $step) {
-                    /* @var \Xibo\Entity\Upgrade $step */
-                    $step->save();
-                }
-            }
-
-            // Cycle through the steps until done
-            set_time_limit(0);
-
-            $previousStepSetsDbVersion = false;
-
-            foreach ($steps as $upgradeStep) {
-                /* @var \Xibo\Entity\Upgrade $upgradeStep */
-                if ($previousStepSetsDbVersion) {
-                    $this->log->notice('Pausing upgrade to reset version');
-                    $this->runMessage .= '#' . __('Upgrade Paused') . PHP_EOL . PHP_EOL;
-                    return;
-                }
-
-                // Assume success
-                $stepFailed = false;
-
-                try {
-                    $upgradeStep->doStep();
-                    $upgradeStep->complete = 1;
-
-                    // Commit
-                    $this->store->commitIfNecessary('upgrade');
-
-                } catch (\Exception $e) {
-                    // Failed to run upgrade step
-                    $this->log->error('Unable to run upgrade stepId ' . $upgradeStep->stepId . '. Message = ' . $e->getMessage());
-                    $this->log->error($e->getTraceAsString());
-
-                    try {
-                        $this->store->getConnection('upgrade')->rollBack();
-                    } catch (\Exception $exception) {
-                        $this->log->error('Unable to rollback. E = ' . $e->getMessage());
-                    }
-
-                    $stepFailed = true;
-                }
-
-                $upgradeStep->lastTryDate = $this->date->parse()->format('U');
-                $upgradeStep->save();
-
-                // Commit the default connection to ensure we persist this upgrade step status change.
-                $this->store->commitIfNecessary();
-
-                // if we are a step that updates the version table, then exit
-                if ($upgradeStep->type == 'sql' && stripos($upgradeStep->action, 'SET `DBVersion`'))
-                    $previousStepSetsDbVersion = true;
-
-                if ($stepFailed)
-                    throw new ConfigurationException('Unable to run upgrade step. Aborting Maintenance Task.');
-            }
-
-            $this->runMessage .= '#' . __('Upgrade Complete') . PHP_EOL . PHP_EOL;
-        }
     }
 
     /**
@@ -140,57 +69,12 @@ class MaintenanceDailyTask implements TaskInterface
     {
         $this->runMessage .= '## ' . __('Tidy Logs') . PHP_EOL;
 
-        if ($this->config->GetSetting('MAINTENANCE_LOG_MAXAGE') != 0) {
+        if ($this->config->getSetting('MAINTENANCE_LOG_MAXAGE') != 0) {
 
-            $maxage = date('Y-m-d H:i:s', time() - (86400 * intval($this->config->GetSetting('MAINTENANCE_LOG_MAXAGE'))));
+            $maxage = date('Y-m-d H:i:s', time() - (86400 * intval($this->config->getSetting('MAINTENANCE_LOG_MAXAGE'))));
 
             try {
                 $this->store->update('DELETE FROM `log` WHERE logdate < :maxage', ['maxage' => $maxage]);
-
-                $this->runMessage .= ' - ' . __('Done.') . PHP_EOL . PHP_EOL;
-            }
-            catch (\PDOException $e) {
-                $this->runMessage .= ' - ' . __('Error.') . PHP_EOL . PHP_EOL;
-                $this->log->error($e->getMessage());
-            }
-        }
-        else {
-            $this->runMessage .= ' - ' . __('Disabled') . PHP_EOL . PHP_EOL;
-        }
-    }
-
-    /**
-     * Tidy Stats
-     */
-    private function tidyStats()
-    {
-        $this->runMessage .= '## ' . __('Tidy Stats') . PHP_EOL;
-
-        if ($this->config->GetSetting('MAINTENANCE_STAT_MAXAGE') != 0) {
-
-            $maxage = date('Y-m-d H:i:s', time() - (86400 * intval($this->config->GetSetting('MAINTENANCE_STAT_MAXAGE'))));
-
-            try {
-                $i = 0;
-                $rows = 1;
-                $maxAttempts = $this->getOption('statsDeleteMaxAttempts', 10);
-                while ($rows > 0) {
-                    $i++;
-
-                    $rows = $this->store->update('DELETE FROM `stat` WHERE statDate < :maxage LIMIT 10000', ['maxage' => $maxage]);
-
-                    // Give SQL time to recover
-                    if ($rows > 0) {
-                        $this->log->debug('Stats delete effected ' . $rows . ' rows, sleeping.');
-                        sleep($this->getOption('statsDeleteSleep', 3));
-                    }
-
-                    // Break if we've exceeded the maximum attempts.
-                    if ($i >= $maxAttempts)
-                        break;
-                }
-
-                $this->log->debug('Deleted Stats back to ' . $maxage . ' in ' . $i . ' attempts');
 
                 $this->runMessage .= ' - ' . __('Done.') . PHP_EOL . PHP_EOL;
             }
@@ -216,25 +100,37 @@ class MaintenanceDailyTask implements TaskInterface
 
     /**
      * Import Layouts
+     * @throws XiboException
      */
     private function importLayouts()
     {
         $this->runMessage .= '## ' . __('Import Layouts') . PHP_EOL;
 
-        if (!$this->config->isUpgradePending() && $this->config->GetSetting('DEFAULTS_IMPORTED') == 0) {
+        if ($this->config->getSetting('DEFAULTS_IMPORTED') == 0) {
 
             $folder = $this->config->uri('layouts', true);
 
             foreach (array_diff(scandir($folder), array('..', '.')) as $file) {
                 if (stripos($file, '.zip')) {
-                    $layout = $this->layoutFactory->createFromZip($folder . '/' . $file, null, 1, false, false, true, false, true, $this->app->container->get('\Xibo\Controller\Library')->setApp($this->app));
+                    $layout = $this->layoutFactory->createFromZip(
+                        $folder . '/' . $file,
+                        null,
+                        $this->userFactory->getSystemUser()->getId(),
+                        false,
+                        false,
+                        true,
+                        false,
+                        true,
+                        $this->libraryController
+                    );
+
                     $layout->save([
                         'audit' => false
                     ]);
                 }
             }
 
-            $this->config->ChangeSetting('DEFAULTS_IMPORTED', 1);
+            $this->config->changeSetting('DEFAULTS_IMPORTED', 1);
 
             $this->runMessage .= ' - ' . __('Done.') . PHP_EOL . PHP_EOL;
         } else {
@@ -247,9 +143,7 @@ class MaintenanceDailyTask implements TaskInterface
      */
     private function installModuleFiles()
     {
-        /** @var \Xibo\Controller\Library $libraryController */
-        $libraryController = $this->app->container->get('\Xibo\Controller\Library');
-        $libraryController->installAllModuleFiles();
+        $this->libraryController->installAllModuleFiles();
     }
 
     /**

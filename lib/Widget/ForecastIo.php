@@ -24,9 +24,10 @@ namespace Xibo\Widget;
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\RequestException;
 use Illuminate\Support\Str;
-use Xibo\Exception\InvalidArgumentException;
 use Respect\Validation\Validator as v;
 use Xibo\Entity\Media;
+use Xibo\Exception\ConfigurationException;
+use Xibo\Exception\InvalidArgumentException;
 use Xibo\Exception\NotFoundException;
 use Xibo\Exception\XiboException;
 use Xibo\Factory\ModuleFactory;
@@ -56,6 +57,14 @@ class ForecastIo extends ModuleWidget
     }
 
     /**
+     * Javascript functions for the layout designer
+     */
+    public function layoutDesignerJavaScript()
+    {
+        return 'forecastio-designer-javascript';
+    }
+
+    /**
      * Install or Update this module
      * @param ModuleFactory $moduleFactory
      */
@@ -68,7 +77,6 @@ class ForecastIo extends ModuleWidget
             $module->type = 'forecastio';
             $module->class = 'Xibo\Widget\ForecastIo';
             $module->description = 'Weather Powered by DarkSky';
-            $module->imageUri = 'forms/library.gif';
             $module->enabled = 1;
             $module->previewEnabled = 1;
             $module->assignable = 1;
@@ -77,6 +85,7 @@ class ForecastIo extends ModuleWidget
             $module->schemaVersion = $this->codeSchemaVersion;
             $module->settings = [];
             $module->defaultDuration = 60;
+            $module->installName = 'forecastio';
 
             $this->setModule($module);
             $this->installModule();
@@ -129,37 +138,19 @@ class ForecastIo extends ModuleWidget
         $this->module->settings['cachePeriod'] = $cachePeriod;
     }
 
-    public function validate()
-    {
-        
-        if($this->getOption('overrideTemplate') == 0 && ( $this->getOption('templateId') == '' || $this->getOption('templateId') == null) )
-            throw new \InvalidArgumentException(__('Please choose a template'));
-            
-        if ($this->getUseDuration() == 1 && $this->getDuration() == 0)
-            throw new \InvalidArgumentException(__('Please enter a duration'));
-
-        if ($this->getOption('useDisplayLocation') == 0) {
-            // Validate lat/long
-            if (!v::latitude()->validate($this->getOption('latitude')))
-                throw new \InvalidArgumentException(__('The latitude entered is not valid.'));
-
-            if (!v::longitude()->validate($this->getOption('longitude')))
-                throw new \InvalidArgumentException(__('The longitude entered is not valid.'));
-        }
-    }
-
     /**
-     * Adds a Weather Widget
-     * @SWG\Post(
-     *  path="/playlist/widget/forecastIo/{playlistId}",
-     *  operationId="WidgetWeatherAdd",
+     * Edit Widget
+     *
+     * @SWG\Put(
+     *  path="/playlist/widget/{widgetId}?weather",
+     *  operationId="WidgetWeatherEdit",
      *  tags={"widget"},
-     *  summary="Add a Weather Widget",
-     *  description="Add a new Weather Widget to the specified playlist",
+     *  summary="Edit Weather Widget",
+     *  description="Edit Weather Widget. This call will replace existing Widget object, all not supplied parameters will be set to default.",
      *  @SWG\Parameter(
-     *      name="playlistId",
+     *      name="widgetId",
      *      in="path",
-     *      description="The playlist ID to add a Weather widget",
+     *      description="The WidgetId to Edit",
      *      type="integer",
      *      required=true
      *   ),
@@ -184,6 +175,13 @@ class ForecastIo extends ModuleWidget
      *      type="integer",
      *      required=false
      *  ),
+     *  @SWG\Parameter(
+     *      name="enableStat",
+     *      in="formData",
+     *      description="The option (On, Off, Inherit) to enable the collection of Widget Proof of Play statistics",
+     *      type="string",
+     *      required=false
+     *   ),
      *  @SWG\Parameter(
      *      name="useDisplayLocation",
      *      in="formData",
@@ -269,10 +267,24 @@ class ForecastIo extends ModuleWidget
      *      required=false
      *   ),
      *  @SWG\Parameter(
+     *      name="currentTemplate_advanced",
+     *      in="formData",
+     *      description="A flag (0, 1), Should text area by presented as a visual editor?",
+     *      type="integer",
+     *      required=false
+     *   ),
+     *  @SWG\Parameter(
      *      name="dailyTemplate",
      *      in="formData",
      *      description="Replaces [dailyForecast] in main template, Pass only with overrideTemplate set to 1 ",
      *      type="string",
+     *      required=false
+     *   ),
+     *  @SWG\Parameter(
+     *      name="dailyTemplate_advanced",
+     *      in="formData",
+     *      description="A flag (0, 1), Should text area by presented as a visual editor?",
+     *      type="integer",
      *      required=false
      *   ),
      *  @SWG\Parameter(
@@ -290,55 +302,20 @@ class ForecastIo extends ModuleWidget
      *      required=false
      *   ),
      *  @SWG\Response(
-     *      response=201,
+     *      response=200,
      *      description="successful operation",
-     *      @SWG\Schema(ref="#/definitions/Widget"),
-     *      @SWG\Header(
-     *          header="Location",
-     *          description="Location of the new widget",
-     *          type="string"
-     *      )
+     *      @SWG\Schema(ref="#/definitions/Widget")
      *  )
      * )
-     */
-    public function add()
-    {
-        $this->setDuration($this->getSanitizer()->getInt('duration', $this->getDuration()));
-        $this->setUseDuration($this->getSanitizer()->getCheckbox('useDuration'));
-        $this->setOption('name', $this->getSanitizer()->getString('name'));
-        $this->setOption('useDisplayLocation', $this->getSanitizer()->getCheckbox('useDisplayLocation'));
-        $this->setOption('longitude', $this->getSanitizer()->getDouble('longitude'));
-        $this->setOption('latitude', $this->getSanitizer()->getDouble('latitude'));
-        $this->setOption('templateId', $this->getSanitizer()->getString('templateId'));
-        $this->setOption('overrideTemplate', $this->getSanitizer()->getCheckbox('overrideTemplate'));
-        $this->setOption('units', $this->getSanitizer()->getString('units'));
-        $this->setOption('updateInterval', $this->getSanitizer()->getInt('updateInterval', 60));
-        $this->setOption('lang', $this->getSanitizer()->getString('lang'));
-        $this->setOption('dayConditionsOnly', $this->getSanitizer()->getCheckbox('dayConditionsOnly'));
-        
-        if( $this->getOption('overrideTemplate') == 1 ){
-            $this->setRawNode('styleSheet', $this->getSanitizer()->getParam('styleSheet', null));
-            $this->setRawNode('currentTemplate', $this->getSanitizer()->getParam('currentTemplate', null));
-            $this->setRawNode('dailyTemplate', $this->getSanitizer()->getParam('dailyTemplate', null));
-            $this->setOption('widgetOriginalWidth', $this->getSanitizer()->getInt('widgetOriginalWidth'));
-            $this->setOption('widgetOriginalHeight', $this->getSanitizer()->getInt('widgetOriginalHeight'));
-        }
-        
-        $this->setRawNode('javaScript', $this->getSanitizer()->getParam('javaScript', ''));
-        
-        // Save the widget
-        $this->validate();
-        $this->saveWidget();
-    }
-
-    /**
-     * Edit Media in the Database
+     *
+     * @throws \Xibo\Exception\XiboException
      */
     public function edit()
     {
         $this->setDuration($this->getSanitizer()->getInt('duration', $this->getDuration()));
         $this->setUseDuration($this->getSanitizer()->getCheckbox('useDuration'));
         $this->setOption('name', $this->getSanitizer()->getString('name'));
+        $this->setOption('enableStat', $this->getSanitizer()->getString('enableStat'));
         $this->setOption('useDisplayLocation', $this->getSanitizer()->getCheckbox('useDisplayLocation'));
         $this->setOption('longitude', $this->getSanitizer()->getDouble('longitude'));
         $this->setOption('latitude', $this->getSanitizer()->getDouble('latitude'));
@@ -346,13 +323,15 @@ class ForecastIo extends ModuleWidget
         $this->setOption('overrideTemplate', $this->getSanitizer()->getCheckbox('overrideTemplate'));
         $this->setOption('units', $this->getSanitizer()->getString('units'));
         $this->setOption('updateInterval', $this->getSanitizer()->getInt('updateInterval', 60));
-        $this->setOption('lang', $this->getSanitizer()->getString('lang'));
+        $this->setOption('lang', $this->getSanitizer()->getString('lang', 'en'));
         $this->setOption('dayConditionsOnly', $this->getSanitizer()->getCheckbox('dayConditionsOnly'));
         
-        if( $this->getOption('overrideTemplate') == 1 ){
+        if ($this->getOption('overrideTemplate') == 1) {
             $this->setRawNode('styleSheet', $this->getSanitizer()->getParam('styleSheet', null));
             $this->setRawNode('currentTemplate', $this->getSanitizer()->getParam('currentTemplate', null));
+            $this->setOption('currentTemplate_advanced', $this->getSanitizer()->getCheckbox('currentTemplate_advanced'));
             $this->setRawNode('dailyTemplate', $this->getSanitizer()->getParam('dailyTemplate', null));
+            $this->setOption('dailyTemplate_advanced', $this->getSanitizer()->getCheckbox('dailyTemplate_advanced'));
             $this->setOption('widgetOriginalWidth', $this->getSanitizer()->getInt('widgetOriginalWidth'));
             $this->setOption('widgetOriginalHeight', $this->getSanitizer()->getInt('widgetOriginalHeight'));
         }
@@ -360,7 +339,7 @@ class ForecastIo extends ModuleWidget
         $this->setRawNode('javaScript', $this->getSanitizer()->getParam('javaScript', ''));
 
         // Save the widget
-        $this->validate();
+        $this->isValid();
         $this->saveWidget();
     }
 
@@ -477,8 +456,8 @@ class ForecastIo extends ModuleWidget
      */
     private function getForecastData($displayId)
     {
-        $defaultLat = $this->getConfig()->GetSetting('DEFAULT_LAT');
-        $defaultLong = $this->getConfig()->GetSetting('DEFAULT_LONG');
+        $defaultLat = $this->getConfig()->getSetting('DEFAULT_LAT');
+        $defaultLong = $this->getConfig()->getSetting('DEFAULT_LONG');
 
         if ($this->getOption('useDisplayLocation') == 1) {
             // Use the display ID or the default.
@@ -505,7 +484,7 @@ class ForecastIo extends ModuleWidget
 
         $apiKey = $this->getSetting('apiKey');
         if ($apiKey == '')
-            die(__('Incorrectly configured module'));
+            throw new ConfigurationException('Incorrectly configured module');
 
         // Query the API and Dump the Results.
         $apiOptions = array('units' => $this->getOption('units', 'auto'), 'lang' => $this->getOption('lang', 'en'), 'exclude' => 'minutely,hourly');
@@ -803,11 +782,8 @@ class ForecastIo extends ModuleWidget
 
         // JavaScript to control the size (override the original width and height so that the widget gets blown up )
         $options = array(
-            'previewWidth' => $this->getSanitizer()->getDouble('width', 0),
-            'previewHeight' => $this->getSanitizer()->getDouble('height', 0),
             'originalWidth' => $this->region->width,
             'originalHeight' => $this->region->height,
-            'scaleOverride' => $this->getSanitizer()->getDouble('scale_override', 0),
             'widgetDesignWidth' => $widgetOriginalWidth,
             'widgetDesignHeight'=> $widgetOriginalHeight
         );
@@ -836,13 +812,32 @@ class ForecastIo extends ModuleWidget
     /** @inheritdoc */
     public function isValid()
     {
-        // Using the information you have in your module calculate whether it is valid or not.
-        // 0 = Invalid
-        // 1 = Valid
-        // 2 = Unknown
-        return 1;
+        if ($this->getOption('overrideTemplate') == 0 && ( $this->getOption('templateId') == '' || $this->getOption('templateId') == null))
+            throw new InvalidArgumentException(__('Please choose a template'), 'templateId');
+
+        if ($this->getUseDuration() == 1 && $this->getDuration() == 0)
+            throw new InvalidArgumentException(__('Please enter a duration'), 'duration');
+
+        if ($this->getOption('useDisplayLocation') == 0) {
+            // Validate lat/long
+            if (!v::latitude()->validate($this->getOption('latitude')))
+                throw new InvalidArgumentException(__('The latitude entered is not valid.'), 'latitude');
+
+            if (!v::longitude()->validate($this->getOption('longitude')))
+                throw new InvalidArgumentException(__('The longitude entered is not valid.'), 'longitude');
+        }
+
+        return self::$STATUS_VALID;
     }
 
+    /**
+     * Get a forecast from DarkSky
+     * @param $latitude
+     * @param $longitude
+     * @param null $time
+     * @param array $options
+     * @return bool|mixed
+     */
     public function get($latitude, $longitude, $time = null, $options = array())
     {
         $request_url = self::API_ENDPOINT
@@ -903,6 +898,12 @@ class ForecastIo extends ModuleWidget
     public function getCacheKey($displayId)
     {
         return $this->getWidgetId() . (($displayId === 0 || $this->getOption('useDisplayLocation') == 1) ? '_' . $displayId : '');
+    }
+
+    /** @inheritdoc */
+    public function isCacheDisplaySpecific()
+    {
+        return ($this->getOption('useDisplayLocation') == 1);
     }
 
     public function getWeatherLanguage()

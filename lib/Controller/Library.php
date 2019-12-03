@@ -20,8 +20,12 @@
  */
 namespace Xibo\Controller;
 
+use GuzzleHttp\Client;
+use GuzzleHttp\Exception\RequestException;
+use Mimey\MimeTypes;
 use Stash\Interfaces\PoolInterface;
 use Stash\Invalidation;
+use Respect\Validation\Validator as v;
 use Symfony\Component\EventDispatcher\EventDispatcherInterface;
 use Xibo\Entity\Media;
 use Xibo\Entity\Widget;
@@ -39,6 +43,7 @@ use Xibo\Factory\LayoutFactory;
 use Xibo\Factory\MediaFactory;
 use Xibo\Factory\ModuleFactory;
 use Xibo\Factory\PermissionFactory;
+use Xibo\Factory\PlayerVersionFactory;
 use Xibo\Factory\PlaylistFactory;
 use Xibo\Factory\RegionFactory;
 use Xibo\Factory\ScheduleFactory;
@@ -47,6 +52,7 @@ use Xibo\Factory\UserFactory;
 use Xibo\Factory\UserGroupFactory;
 use Xibo\Factory\WidgetFactory;
 use Xibo\Helper\ByteFormatter;
+use Xibo\Helper\Environment;
 use Xibo\Helper\XiboUploadHandler;
 use Xibo\Service\ConfigServiceInterface;
 use Xibo\Service\DateServiceInterface;
@@ -95,6 +101,9 @@ class Library extends Base
      * @var WidgetFactory
      */
     private $widgetFactory;
+
+    /** @var PlayerVersionFactory */
+    private $playerVersionFactory;
 
     /**
      * @var PlaylistFactory
@@ -161,8 +170,9 @@ class Library extends Base
      * @param DisplayFactory $displayFactory
      * @param ScheduleFactory $scheduleFactory
      * @param DayPartFactory $dayPartFactory
+     * @param PlayerVersionFactory $playerVersionFactory
      */
-    public function __construct($log, $sanitizerService, $state, $user, $help, $date, $config, $store, $pool, $dispatcher, $userFactory, $moduleFactory, $tagFactory, $mediaFactory, $widgetFactory, $permissionFactory, $layoutFactory, $playlistFactory, $userGroupFactory, $displayGroupFactory, $regionFactory, $dataSetFactory, $displayFactory, $scheduleFactory, $dayPartFactory)
+    public function __construct($log, $sanitizerService, $state, $user, $help, $date, $config, $store, $pool, $dispatcher, $userFactory, $moduleFactory, $tagFactory, $mediaFactory, $widgetFactory, $permissionFactory, $layoutFactory, $playlistFactory, $userGroupFactory, $displayGroupFactory, $regionFactory, $dataSetFactory, $displayFactory, $scheduleFactory, $dayPartFactory, $playerVersionFactory)
     {
         $this->setCommonDependencies($log, $sanitizerService, $state, $user, $help, $date, $config);
 
@@ -184,6 +194,7 @@ class Library extends Base
         $this->displayFactory = $displayFactory;
         $this->scheduleFactory = $scheduleFactory;
         $this->dayPartFactory = $dayPartFactory;
+        $this->playerVersionFactory = $playerVersionFactory;
     }
 
     /**
@@ -250,6 +261,15 @@ class Library extends Base
     }
 
     /**
+     * Get PlayerVersion Factory
+     * @return PlayerVersionFactory
+     */
+    public function getPlayerVersionFactory()
+    {
+        return $this->playerVersionFactory;
+    }
+
+    /**
      * Get UserGroup Factory
      * @return UserGroupFactory
      */
@@ -301,6 +321,14 @@ class Library extends Base
     }
 
     /**
+     * @return TagFactory
+     */
+    public function getTagFactory()
+    {
+        return $this->tagFactory;
+    }
+
+    /**
      * Displays the page logic
      */
     function displayPage()
@@ -309,9 +337,87 @@ class Library extends Base
         $this->getState()->template = 'library-page';
         $this->getState()->setData([
             'users' => $this->userFactory->query(),
-            'modules' => $this->moduleFactory->query(['module'], ['regionSpecific' => 0, 'enabled' => 1]),
-            'groups' => $this->userGroupFactory->query()
+            'modules' => $this->moduleFactory->query(['module'], ['regionSpecific' => 0, 'enabled' => 1, 'notPlayerSoftware' => 1, 'notSavedReport' => 1]),
+            'groups' => $this->userGroupFactory->query(),
+            'validExt' => implode('|', $this->moduleFactory->getValidExtensions(['notPlayerSoftware' => 1, 'notSavedReport' => 1]))
         ]);
+    }
+
+    /**
+     * Set Enable Stats Collection of a media
+     * @param int $mediaId
+     *
+     * @SWG\Put(
+     *  path="/library/setenablestat/{mediaId}",
+     *  operationId="mediaSetEnableStat",
+     *  tags={"library"},
+     *  summary="Enable Stats Collection",
+     *  description="Set Enable Stats Collection? to use for the collection of Proof of Play statistics for a media.",
+     *  @SWG\Parameter(
+     *      name="mediaId",
+     *      in="path",
+     *      description="The Media ID",
+     *      type="integer",
+     *      required=true
+     *   ),
+     *  @SWG\Parameter(
+     *      name="enableStat",
+     *      in="formData",
+     *      description="The option to enable the collection of Media Proof of Play statistics",
+     *      type="string",
+     *      required=true
+     *   ),
+     *  @SWG\Response(
+     *      response=204,
+     *      description="successful operation"
+     *  )
+     * )
+     *
+     * @throws XiboException
+     */
+    public function setEnableStat($mediaId)
+    {
+        // Get the Media
+        $media = $this->mediaFactory->getById($mediaId);
+
+        // Check Permissions
+        if (!$this->getUser()->checkViewable($media))
+            throw new AccessDeniedException();
+
+        $enableStat = $this->getSanitizer()->getString('enableStat');
+
+        $media->enableStat = $enableStat;
+        $media->save(['saveTags' => false]);
+
+        // Return
+        $this->getState()->hydrate([
+            'httpStatus' => 204,
+            'message' => sprintf(__('For Media %s Enable Stats Collection is set to %s'), $media->name, __($media->enableStat))
+        ]);
+    }
+
+    /**
+     * Set Enable Stat Form
+     * @param int $mediaId
+     * @throws XiboException
+     */
+    public function setEnableStatForm($mediaId)
+    {
+
+        // Get the Media
+        $media = $this->mediaFactory->getById($mediaId);
+
+        // Check Permissions
+        if (!$this->getUser()->checkViewable($media))
+            throw new AccessDeniedException();
+
+        $data = [
+            'media' => $media,
+            'help' => $this->getHelp()->link('Layout', 'EnableStat')
+        ];
+
+        $this->getState()->template = 'library-form-setenablestat';
+        $this->getState()->setData($data);
     }
 
     /**
@@ -420,7 +526,9 @@ class Library extends Base
             'duration' => $this->getSanitizer()->getString('duration'),
             'fileSize' => $this->getSanitizer()->getString('fileSize'),
             'ownerUserGroupId' => $this->getSanitizer()->getInt('ownerUserGroupId'),
-            'assignable' => $this->getSanitizer()->getInt('assignable')
+            'assignable' => $this->getSanitizer()->getInt('assignable'),
+            'notPlayerSoftware' => 1,
+            'notSavedReport' => 1
         ]));
 
         // Add some additional row content
@@ -442,10 +550,49 @@ class Library extends Base
 
             $media->fileSizeFormatted = ByteFormatter::format($media->fileSize);
 
-            if ($this->isApi())
-                break;
+            // Media expiry
+            $media->mediaExpiresIn = __('Expires %s');
+            $media->mediaExpiryFailed = __('Expired ');
+            $media->mediaNoExpiryDate = __('Never');
+
+            if ($this->isApi()) {
+                $media->excludeProperty('mediaExpiresIn');
+                $media->excludeProperty('mediaExpiryFailed');
+                $media->excludeProperty('mediaNoExpiryDate');
+                $media->expires = ($media->expires == 0) ? 0 : $this->getDate()->getLocalDate($media->expires);
+                continue;
+            }
 
             $media->includeProperty('buttons');
+
+            switch ($media->released) {
+
+                case 1:
+                    $media->releasedDescription = '';
+                    break;
+
+                case 2:
+                    $media->releasedDescription = __('The uploaded image is too large and cannot be processed, please use another image.');
+                    break;
+
+                default:
+                    $media->releasedDescription = __('This image will be resized according to set thresholds and limits.');
+            }
+
+            switch ($media->enableStat) {
+
+                case 'On':
+                    $media->enableStatDescription = __('This Media has enable stat collection set to ON');
+                    break;
+
+                case 'Off':
+                    $media->enableStatDescription = __('This Media has enable stat collection set to OFF');
+                    break;
+
+                default:
+                    $media->enableStatDescription = __('This Media has enable stat collection set to INHERIT');
+            }
+
             $media->buttons = array();
 
             // Buttons
@@ -455,6 +602,13 @@ class Library extends Base
                     'id' => 'content_button_edit',
                     'url' => $this->urlFor('library.edit.form', ['id' => $media->mediaId]),
                     'text' => __('Edit')
+                );
+
+                // Copy Button
+                $media->buttons[] = array(
+                    'id' => 'media_button_copy',
+                    'url' => $this->urlFor('library.copy.form', ['id' => $media->mediaId]),
+                    'text' => __('Copy')
                 );
             }
 
@@ -493,6 +647,22 @@ class Library extends Base
                 'text' => __('Download')
             );
 
+            // Set Enable Stat
+            $media->buttons[] = array(
+                'id' => 'library_button_setenablestat',
+                'url' => $this->urlFor('library.setenablestat.form', ['id' => $media->mediaId]),
+                'text' => __('Enable stats collection?'),
+                'multi-select' => true,
+                'dataAttributes' => array(
+                    array('name' => 'commit-url', 'value' => $this->urlFor('library.setenablestat', ['id' => $media->mediaId])),
+                    array('name' => 'commit-method', 'value' => 'put'),
+                    array('name' => 'id', 'value' => 'library_button_setenablestat'),
+                    array('name' => 'text', 'value' => __('Enable stats collection?')),
+                    array('name' => 'rowtitle', 'value' => $media->name),
+                    ['name' => 'form-callback', 'value' => 'setEnableStatMultiSelectFormOpen']
+                )
+            );
+
             $media->buttons[] = ['divider' => true];
 
             $media->buttons[] = array(
@@ -518,7 +688,7 @@ class Library extends Base
         if (!$this->getUser()->checkDeleteable($media))
             throw new AccessDeniedException();
 
-        $media->setChildObjectDependencies($this->layoutFactory, $this->widgetFactory, $this->displayGroupFactory, $this->displayFactory, $this->scheduleFactory);
+        $media->setChildObjectDependencies($this->layoutFactory, $this->widgetFactory, $this->displayGroupFactory, $this->displayFactory, $this->scheduleFactory, $this->playerVersionFactory);
         $media->load(['deleting' => true]);
 
         $this->getState()->template = 'library-form-delete';
@@ -566,7 +736,7 @@ class Library extends Base
             throw new AccessDeniedException();
 
         // Check
-        $media->setChildObjectDependencies($this->layoutFactory, $this->widgetFactory, $this->displayGroupFactory, $this->displayFactory, $this->scheduleFactory);
+        $media->setChildObjectDependencies($this->layoutFactory, $this->widgetFactory, $this->displayGroupFactory, $this->displayFactory, $this->scheduleFactory, $this->playerVersionFactory);
         $media->load(['deleting' => true]);
 
         if ($media->isUsed() && $this->getSanitizer()->getCheckbox('forceDelete') == 0)
@@ -650,7 +820,7 @@ class Library extends Base
             'allowMediaTypeChange' => 0
         ], $options);
 
-        $libraryFolder = $this->getConfig()->GetSetting('LIBRARY_LOCATION');
+        $libraryFolder = $this->getConfig()->getSetting('LIBRARY_LOCATION');
 
         // Make sure the library exists
         self::ensureLibraryExists($libraryFolder);
@@ -664,7 +834,7 @@ class Library extends Base
             $validExt = $this->moduleFactory->getValidExtensions();
 
         // Make sure there is room in the library
-        $libraryLimit = $this->getConfig()->GetSetting('LIBRARY_SIZE_LIMIT_KB') * 1024;
+        $libraryLimit = $this->getConfig()->getSetting('LIBRARY_SIZE_LIMIT_KB') * 1024;
 
         $options = array(
             'userId' => $this->getUser()->userId,
@@ -705,17 +875,34 @@ class Library extends Base
         if (!$this->getUser()->checkEditable($media))
             throw new AccessDeniedException();
 
+        $tags = '';
+
+        $arrayOfTags = array_filter(explode(',', $media->tags));
+        $arrayOfTagValues = array_filter(explode(',', $media->tagValues));
+
+        for ($i=0; $i<count($arrayOfTags); $i++) {
+            if (isset($arrayOfTags[$i]) && (isset($arrayOfTagValues[$i]) && $arrayOfTagValues[$i] !== 'NULL')) {
+                $tags .= $arrayOfTags[$i] . '|' . $arrayOfTagValues[$i];
+                $tags .= ',';
+            } else {
+                $tags .= $arrayOfTags[$i] . ',';
+            }
+        }
+
+        $media->enableStat = ($media->enableStat == null) ? $this->getConfig()->getSetting('MEDIA_STATS_ENABLED_DEFAULT') : $media->enableStat;
+
         $this->getState()->template = 'library-form-edit';
         $this->getState()->setData([
             'media' => $media,
             'validExtensions' => implode('|', $this->moduleFactory->getValidExtensions(['type' => $media->mediaType])),
-            'help' => $this->getHelp()->link('Library', 'Edit')
+            'help' => $this->getHelp()->link('Library', 'Edit'),
+            'tags' => $tags,
+            'expiryDate' => ($media->expires == 0 ) ? null : date('Y-m-d H:i:s', $media->expires)
         ]);
     }
 
     /**
      * Edit Media
-     * @param int $mediaId
      *
      * @SWG\Put(
      *  path="/library/{mediaId}",
@@ -771,6 +958,14 @@ class Library extends Base
      *      @SWG\Schema(ref="#/definitions/Media")
      *  )
      * )
+     *
+     * @param int $mediaId
+     *
+     * @throws ConfigurationException
+     * @throws InvalidArgumentException
+     * @throws NotFoundException
+     * @throws XiboException
+     * @throws \Xibo\Exception\DuplicateEntityException
      */
     public function edit($mediaId)
     {
@@ -786,9 +981,21 @@ class Library extends Base
         $media->duration = $this->getSanitizer()->getInt('duration');
         $media->retired = $this->getSanitizer()->getCheckbox('retired');
         $media->replaceTags($this->tagFactory->tagsFromString($this->getSanitizer()->getString('tags')));
+        $media->enableStat = $this->getSanitizer()->getString('enableStat');
+
+        if ($this->getSanitizer()->getDate('expires') != null ) {
+
+            if ($this->getSanitizer()->getDate('expires')->format('U') > time()) {
+                $media->expires = $this->getSanitizer()->getDate('expires')->format('U');
+            } else {
+                throw new InvalidArgumentException(__('Cannot set Expiry date in the past'), 'expires');
+            }
+        } else {
+            $media->expires = 0;
+        }
 
         // Should we update the media in all layouts?
-        if ($this->getSanitizer()->getCheckbox('updateInLayouts') == 1) {
+        if ($this->getSanitizer()->getCheckbox('updateInLayouts') == 1 || $media->hasPropertyChanged('enableStat')) {
             foreach ($this->widgetFactory->getByMediaId($media->mediaId) as $widget) {
                 /* @var Widget $widget */
                 $widget->duration = $media->duration;
@@ -817,7 +1024,7 @@ class Library extends Base
      */
     public function tidyForm()
     {
-        if ($this->getConfig()->GetSetting('SETTING_LIBRARY_TIDY_ENABLED') != 1)
+        if ($this->getConfig()->getSetting('SETTING_LIBRARY_TIDY_ENABLED') != 1)
             throw new ConfigurationException(__('Sorry this function is disabled.'));
 
         // Work out how many files there are
@@ -873,7 +1080,7 @@ class Library extends Base
      */
     public function tidy()
     {
-        if ($this->getConfig()->GetSetting('SETTING_LIBRARY_TIDY_ENABLED') != 1)
+        if ($this->getConfig()->getSetting('SETTING_LIBRARY_TIDY_ENABLED') != 1)
             throw new ConfigurationException(__('Sorry this function is disabled.'));
 
         $tidyGenericFiles = $this->getSanitizer()->getCheckbox('tidyGenericFiles');
@@ -889,7 +1096,7 @@ class Library extends Base
 
             // Eligable for delete
             $i++;
-            $item->setChildObjectDependencies($this->layoutFactory, $this->widgetFactory, $this->displayGroupFactory, $this->displayFactory, $this->scheduleFactory);
+            $item->setChildObjectDependencies($this->layoutFactory, $this->widgetFactory, $this->displayGroupFactory, $this->displayFactory, $this->scheduleFactory, $this->playerVersionFactory);
             $item->load();
             $item->delete();
         }
@@ -931,7 +1138,7 @@ class Library extends Base
      */
     public function getLibraryCacheUri()
     {
-        return $this->getConfig()->GetSetting('LIBRARY_LOCATION') . '/cache';
+        return $this->getConfig()->getSetting('LIBRARY_LOCATION') . '/cache';
     }
 
     /**
@@ -1078,9 +1285,6 @@ class Library extends Base
      */
     public function fontCKEditorConfig()
     {
-        if (DBVERSION < 125)
-            return null;
-
         // Regenerate the CSS for fonts
         $css = $this->installFonts(['invalidateCache' => false]);
 
@@ -1140,7 +1344,7 @@ class Library extends Base
             $fontList = [];
 
             // Check the library exists
-            $libraryLocation = $this->getConfig()->GetSetting('LIBRARY_LOCATION');
+            $libraryLocation = $this->getConfig()->getSetting('LIBRARY_LOCATION');
             $this->ensureLibraryExists($libraryLocation);
 
             if (count($fonts) > 0) {
@@ -1186,7 +1390,7 @@ class Library extends Base
                     }
 
                     // Put the player CSS into the temporary library location
-                    $tempUrl = $this->getConfig()->GetSetting('LIBRARY_LOCATION') . 'temp/fonts.css';
+                    $tempUrl = $this->getConfig()->getSetting('LIBRARY_LOCATION') . 'temp/fonts.css';
                     file_put_contents($tempUrl, $css);
 
                     // Install it (doesn't expire, isn't a system file, force update)
@@ -1194,7 +1398,7 @@ class Library extends Base
                     $media->expires = 0;
                     $media->moduleSystemFile = true;
                     $media->isSaveRequired = true;
-                    $media->save();
+                    $media->save(['saveTags' => false]);
 
                     // We can remove the temp file
                     @unlink($tempUrl);
@@ -1255,7 +1459,7 @@ class Library extends Base
      */
     public function removeTempFiles()
     {
-        $libraryTemp = $this->getConfig()->GetSetting('LIBRARY_LOCATION') . 'temp';
+        $libraryTemp = $this->getConfig()->getSetting('LIBRARY_LOCATION') . 'temp';
 
         if (!is_dir($libraryTemp))
             return;
@@ -1287,7 +1491,7 @@ class Library extends Base
             /* @var \Xibo\Entity\Media $entry */
             // If the media type is a module, then pretend its a generic file
             $this->getLog()->info('Removing Expired File %s', $entry->name);
-            $entry->setChildObjectDependencies($this->layoutFactory, $this->widgetFactory, $this->displayGroupFactory, $this->displayFactory, $this->scheduleFactory);
+            $entry->setChildObjectDependencies($this->layoutFactory, $this->widgetFactory, $this->displayGroupFactory, $this->displayFactory, $this->scheduleFactory, $this->playerVersionFactory);
             $entry->delete();
         }
     }
@@ -1350,6 +1554,7 @@ class Library extends Base
      *
      * @param $mediaId
      * @throws \Xibo\Exception\NotFoundException
+     * @throws XiboException
      */
     public function tag($mediaId)
     {
@@ -1470,6 +1675,13 @@ class Library extends Base
      *  tags={"library"},
      *  summary="Get Library Item Usage Report",
      *  description="Get the records for the library item usage report",
+     * @SWG\Parameter(
+     *      name="mediaId",
+     *      in="path",
+     *      description="The Media Id",
+     *      type="integer",
+     *      required=true
+     *   ),
      *  @SWG\Response(
      *     response=200,
      *     description="successful operation"
@@ -1477,6 +1689,7 @@ class Library extends Base
      * )
      *
      * @param int $mediaId
+     * @throws NotFoundException
      */
     public function usage($mediaId)
     {
@@ -1551,6 +1764,11 @@ class Library extends Base
             }
         }
 
+        if ($this->isApi() && $displays == []) {
+            $displays = [
+                'data' =>__('Specified Media item is not in use.')];
+        }
+
         $this->getState()->template = 'grid';
         $this->getState()->recordsTotal = $totalRecords;
         $this->getState()->setData($displays);
@@ -1563,6 +1781,13 @@ class Library extends Base
      *  tags={"library"},
      *  summary="Get Library Item Usage Report for Layouts",
      *  description="Get the records for the library item usage report for Layouts",
+     * @SWG\Parameter(
+     *      name="mediaId",
+     *      in="path",
+     *      description="The Media Id",
+     *      type="integer",
+     *      required=true
+     *   ),
      *  @SWG\Response(
      *     response=200,
      *     description="successful operation"
@@ -1570,6 +1795,7 @@ class Library extends Base
      * )
      *
      * @param int $mediaId
+     * @throws NotFoundException
      */
     public function usageLayouts($mediaId)
     {
@@ -1606,8 +1832,374 @@ class Library extends Base
             }
         }
 
+        if ($this->isApi() && $layouts == []) {
+            $layouts = [
+                'data' =>__('Specified Media item is not in use.')
+            ];
+        }
+
         $this->getState()->template = 'grid';
         $this->getState()->recordsTotal = $this->layoutFactory->countLast();
         $this->getState()->setData($layouts);
+    }
+
+    /**
+     * Copy Media form
+     * @param $mediaId
+     * @throws NotFoundException
+     */
+    public function copyForm($mediaId)
+    {
+        // Get the Media
+        $media = $this->mediaFactory->getById($mediaId);
+
+        // Check Permissions
+        if (!$this->getUser()->checkViewable($media))
+            throw new AccessDeniedException();
+
+        $tags = '';
+
+        $arrayOfTags = array_filter(explode(',', $media->tags));
+        $arrayOfTagValues = array_filter(explode(',', $media->tagValues));
+
+        for ($i=0; $i<count($arrayOfTags); $i++) {
+            if (isset($arrayOfTags[$i]) && (isset($arrayOfTagValues[$i]) && $arrayOfTagValues[$i] !== 'NULL' )) {
+                $tags .= $arrayOfTags[$i] . '|' . $arrayOfTagValues[$i];
+                $tags .= ',';
+            } else {
+                $tags .= $arrayOfTags[$i] . ',';
+            }
+        }
+
+        $this->getState()->template = 'library-form-copy';
+        $this->getState()->setData([
+            'media' => $media,
+            'help' => $this->getHelp()->link('Media', 'Copy'),
+            'tags' => $tags
+        ]);
+    }
+
+    /**
+     * Copies a Media
+     *
+     * @SWG\Post(
+     *  path="/library/copy/{mediaId}",
+     *  operationId="mediaCopy",
+     *  tags={"library"},
+     *  summary="Copy Media",
+     *  description="Copy a Media, providing a new name and tags if applicable",
+     *  @SWG\Parameter(
+     *      name="mediaId",
+     *      in="path",
+     *      description="The media ID to Copy",
+     *      type="integer",
+     *      required=true
+     *   ),
+     *  @SWG\Parameter(
+     *      name="name",
+     *      in="formData",
+     *      description="The name for the new Media",
+     *      type="string",
+     *      required=true
+     *   ),
+     *  @SWG\Parameter(
+     *      name="tags",
+     *      in="formData",
+     *      description="The Optional tags for new Media",
+     *      type="string",
+     *      required=false
+     *   ),
+     *  @SWG\Response(
+     *      response=201,
+     *      description="successful operation",
+     *      @SWG\Schema(ref="#/definitions/Media"),
+     *      @SWG\Header(
+     *          header="Location",
+     *          description="Location of the new record",
+     *          type="string"
+     *      )
+     *  )
+     * )
+     *
+     * @param int $mediaId
+     *
+     * @throws NotFoundException
+     * @throws XiboException
+     */
+    public function copy($mediaId)
+    {
+        // Get the Media
+        $media = $this->mediaFactory->getById($mediaId);
+
+        // Check Permissions
+        if (!$this->getUser()->checkViewable($media))
+            throw new AccessDeniedException();
+
+        // Load the media for Copy
+        $media->load();
+        $media = clone $media;
+
+        // Set new Name and tags
+        $media->name = $this->getSanitizer()->getString('name');
+        $media->replaceTags($this->tagFactory->tagsFromString($this->getSanitizer()->getString('tags')));
+        // Set the Owner to user making the Copy
+        $media->setOwner($this->getUser()->userId);
+
+        // Set from global setting
+        if ($media->enableStat == null) {
+            $media->enableStat = $this->getConfig()->getSetting('MEDIA_STATS_ENABLED_DEFAULT');
+        }
+
+        // Save the new Media
+        $media->save();
+
+        // Return
+        $this->getState()->hydrate([
+            'httpStatus' => 201,
+            'message' => sprintf(__('Copied as %s'), $media->name),
+            'id' => $media->mediaId,
+            'data' => $media
+        ]);
+    }
+
+
+    /**
+     * @SWG\Get(
+     *  path="/library/{mediaId}/isused/",
+     *  operationId="mediaIsUsed",
+     *  tags={"library"},
+     *  summary="Media usage check",
+     *  description="Checks if a Media is being used",
+     * @SWG\Parameter(
+     *      name="mediaId",
+     *      in="path",
+     *      description="The Media Id",
+     *      type="integer",
+     *      required=true
+     *   ),
+     *  @SWG\Response(
+     *     response=200,
+     *     description="successful operation"
+     *  )
+     * )
+     *
+     * @param int $mediaId
+     * @throws NotFoundException
+     */
+    public function isUsed($mediaId)
+    {
+        // Get the Media
+        $media = $this->mediaFactory->getById($mediaId);
+        $media->setChildObjectDependencies($this->layoutFactory, $this->widgetFactory, $this->displayGroupFactory, $this->displayFactory, $this->scheduleFactory, $this->playerVersionFactory);
+
+        // Check Permissions
+        if (!$this->getUser()->checkViewable($media))
+            throw new AccessDeniedException();
+
+        // Get count, being the number of times the media needs to appear to be true ( or use the default 0)
+        $count = $this->getSanitizer()->getInt('count', 0);
+
+        // Check and return result
+        $this->getState()->setData([
+            'isUsed' => $media->isUsed($count)
+        ]);
+        
+    }
+
+    public function uploadFromUrlForm()
+    {
+        $this->getState()->template = 'library-form-uploadFromUrl';
+
+        $this->getState()->setData([
+            'uploadSizeMessage' => sprintf(__('This form accepts files up to a maximum size of %s'), Environment::getMaxUploadSize())
+        ]);
+    }
+
+    /**
+     * Upload Media via URL
+     *
+     * @SWG\Post(
+     *  path="/library/uploadUrl",
+     *  operationId="uploadFromUrl",
+     *  tags={"library"},
+     *  summary="Upload Media from URL",
+     *  description="Upload Media to CMS library from an external URL",
+     *  @SWG\Parameter(
+     *      name="url",
+     *      in="formData",
+     *      description="The URL to the media",
+     *      type="string",
+     *      required=true
+     *   ),
+     *  @SWG\Parameter(
+     *      name="type",
+     *      in="formData",
+     *      description="The type of the media, image, video etc",
+     *      type="string",
+     *      required=true
+     *   ),
+     *  @SWG\Parameter(
+     *      name="optionalName",
+     *      in="formData",
+     *      description="An optional name for this media file, if left empty it will default to the file name",
+     *      type="string",
+     *      required=false
+     *   ),
+     *  @SWG\Response(
+     *      response=201,
+     *      description="successful operation",
+     *      @SWG\Schema(ref="#/definitions/Media"),
+     *      @SWG\Header(
+     *          header="Location",
+     *          description="Location of the new record",
+     *          type="string"
+     *      )
+     *  )
+     * )
+     *
+     * @throws InvalidArgumentException
+     * @throws LibraryFullException
+     * @throws NotFoundException
+     * @throws ConfigurationException
+     */
+    public function uploadFromUrl()
+    {
+        $libraryFolder = $this->getConfig()->getSetting('LIBRARY_LOCATION');
+
+        // Make sure the library exists
+        self::ensureLibraryExists($libraryFolder);
+
+        $url = $this->getSanitizer()->getString('url');
+        $type = $this->getSanitizer()->getString('type');
+        $optionalName = $this->getSanitizer()->getString('optionalName');
+
+        // Validate the URL
+        if (!v::url()->notEmpty()->validate(urldecode($url)) || !filter_var($url, FILTER_VALIDATE_URL)) {
+            throw new InvalidArgumentException(__('Provided URL is invalid'), 'url');
+        }
+
+        $librarySizeLimit = $this->getConfig()->getSetting('LIBRARY_SIZE_LIMIT_KB') * 1024;
+        $librarySizeLimitMB = round(($librarySizeLimit / 1024) / 1024, 2);
+
+        if ($librarySizeLimit > 0 && $this->libraryUsage() > $librarySizeLimit) {
+            throw new InvalidArgumentException(sprintf(__('Your library is full. Library Limit: %s MB'), $librarySizeLimitMB), 'libraryLimit');
+        }
+
+        // remote file size
+        $size = $this->getRemoteFileSize($url);
+
+        if (ByteFormatter::toBytes(Environment::getMaxUploadSize()) < $size) {
+            throw new InvalidArgumentException(sprintf(__('This file size exceeds your environment Max Upload Size %s'), Environment::getMaxUploadSize()), 'size');
+        }
+
+        $this->getUser()->isQuotaFullByUser();
+
+        // if the type is not provided (web ui), get the extension from pathinfo/Guzzle and try to find correct module for the media
+        if (!isset($type)) {
+            $ext = $this->getRemoteFileExtension($url);
+            $module = $this->getModuleFactory()->getByExtension($ext);
+            $module = $this->getModuleFactory()->create($module->type);
+        } else {
+            // we have the type in request (API) double check that the module type exists
+            // we are also getting extension here from pathinfo / the Content-Type header via Guzzle, depending on the URL we may need it in saveFile in Media entity
+            $ext = $this->getRemoteFileExtension($url);
+            $module = $this->getModuleFactory()->create($type);
+        }
+
+        // if we were provided with optional Media name set it here, otherwise get it from pathinfo
+        if (isset($optionalName)) {
+            $name = $optionalName;
+        } else {
+            // get the media name from pathinfo
+            $name = pathinfo(parse_url($url, PHP_URL_PATH), PATHINFO_FILENAME);
+        }
+
+        // double check that provided Module Type and Extension are valid
+        $moduleCheck = $this->getModuleFactory()->query(null, ['extension' => $ext, 'type' => $module->getModuleType()]);
+
+        if (count($moduleCheck) <= 0) {
+            throw new NotFoundException(sprintf(__('Invalid Module type or extension. Module type %s does not allow for %s extension'), $module->getModuleType(), $ext));
+        }
+
+        // add our media to queueDownload and process the downloads
+        $this->mediaFactory->queueDownload($name, str_replace(' ', '%20', htmlspecialchars_decode($url)), 0, ['fileType' => strtolower($module->getModuleType()), 'duration' => $module->determineDuration(), 'extension' => $ext]);
+        $this->mediaFactory->processDownloads(function($media) {
+            // Success
+            $this->getLog()->debug('Successfully uploaded Media from URL, Media Id is ' . $media->mediaId);
+        });
+
+        // get our uploaded media
+        $media = $this->mediaFactory->getByName($name);
+
+        // Return
+        $this->getState()->hydrate([
+            'httpStatus' => 201,
+            'message' => sprintf(__('Media upload from URL was successful')),
+            'id' => $media->mediaId,
+            'data' => $media
+        ]);
+    }
+
+    /**
+     * @param $url
+     * @return int
+     * @throws InvalidArgumentException
+     */
+    private function getRemoteFileSize($url)
+    {
+        $size = -1;
+        $guzzle = new Client($this->getConfig()->getGuzzleProxy());
+
+        try {
+            $head = $guzzle->head($url);
+            $contentLength = $head->getHeader('Content-Length');
+
+            foreach ($contentLength as $value) {
+                $size = $value;
+            }
+
+        } catch (RequestException $e) {
+            $this->getLog()->debug('Upload from url failed for URL ' . $url . ' with following message ' . $e->getMessage());
+            throw new InvalidArgumentException(('File not found'), 'url');
+        }
+
+        if ($size <= 0) {
+            throw new InvalidArgumentException(('Cannot determine the file size'), 'size');
+        }
+
+        return (int)$size;
+    }
+
+    /**
+     * @param $url
+     * @return string
+     * @throws InvalidArgumentException
+     */
+    private function getRemoteFileExtension($url)
+    {
+        // first try to get the extension from pathinfo
+        $extension = pathinfo(parse_url($url, PHP_URL_PATH), PATHINFO_EXTENSION);
+
+        // failing that get the extension from Content-Type header via Guzzle
+         if ($extension == '') {
+             $guzzle = new Client($this->getConfig()->getGuzzleProxy());
+             $head = $guzzle->head($url);
+             $contentType = $head->getHeader('Content-Type');
+
+             foreach ($contentType as $value) {
+                 $extension = $value;
+             }
+
+             // get the extension corresponding to the mime type
+             $mimeTypes = new MimeTypes();
+             $extension = $mimeTypes->getExtension($extension);
+         }
+
+         // if we could not determine the file extension at this point, throw an error
+        if ($extension == '') {
+            throw new InvalidArgumentException(('Cannot determine the file extension'), 'extension');
+        }
+
+        return $extension;
     }
 }

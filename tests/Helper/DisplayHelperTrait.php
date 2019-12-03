@@ -21,9 +21,11 @@ trait DisplayHelperTrait
 {
     /**
      * @param int $status
+     * @param string $type
      * @return XiboDisplay
+     * @throws \Exception
      */
-    protected function createDisplay($status = null)
+    protected function createDisplay($status = null, $type = 'windows')
     {
         // Generate names for display and xmr channel
         $hardwareId = Random::generateString(12, 'phpunit');
@@ -40,7 +42,7 @@ pbBhRgkIdydXoZZdjQIDAQAB
         // Register our display
         $this->getXmdsWrapper()->RegisterDisplay($hardwareId,
             $hardwareId,
-            'windows',
+            $type,
             null,
             null,
             null,
@@ -86,9 +88,24 @@ pbBhRgkIdydXoZZdjQIDAQAB
      */
     protected function displaySetLicensed($display)
     {
+        $display->licensed = 1;
+
         $this->getStore()->update('UPDATE `display` SET licensed = 1, auditingUntil = :auditingUntil WHERE displayId = :displayId', [
             'displayId' => $display->displayId,
             'auditingUntil' => (time() + 86400)
+        ]);
+        $this->getStore()->commitIfNecessary();
+    }
+
+    /**
+     * @param XiboDisplay $display
+     * @param string $timeZone
+     */
+    protected function displaySetTimezone($display, $timeZone)
+    {
+        $this->getStore()->update('UPDATE `display` SET timeZone = :timeZone WHERE displayId = :displayId', [
+            'displayId' => $display->displayId,
+            'timeZone' => $timeZone
         ]);
         $this->getStore()->commitIfNecessary();
     }
@@ -110,7 +127,7 @@ pbBhRgkIdydXoZZdjQIDAQAB
     {
         // Requery the Display
         try {
-            $check = (new XiboDisplay($this->getEntityProvider()))->getById($display->displayGroupId);
+            $check = (new XiboDisplay($this->getEntityProvider()))->getById($display->displayId);
 
             $this->getLogger()->debug('Tested Display ' . $display->display . '. Status returned is ' . $check->mediaInventoryStatus);
 

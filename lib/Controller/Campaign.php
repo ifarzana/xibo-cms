@@ -211,15 +211,6 @@ class Campaign extends Base
 
                 $campaign->buttons[] = ['divider' => true];
 
-                // Assign Layouts
-                $campaign->buttons[] = array(
-                    'id' => 'campaign_button_layouts',
-                    'url' => $this->urlFor('campaign.layouts.form', ['id' => $campaign->campaignId]),
-                    'text' => __('Layouts')
-                );
-
-                $campaign->buttons[] = ['divider' => true];
-
                 // Edit the Campaign
                 $campaign->buttons[] = array(
                     'id' => 'campaign_button_edit',
@@ -270,8 +261,12 @@ class Campaign extends Base
      */
     public function addForm()
     {
+        // Load layouts
+        $layouts = [];
+
         $this->getState()->template = 'campaign-form-add';
         $this->getState()->setData([
+            'layouts' => $layouts,
             'help' => $this->getHelp()->link('Campaign', 'Add')
         ]);
     }
@@ -310,10 +305,13 @@ class Campaign extends Base
         $campaign->save();
 
         // Permissions
-        foreach ($this->permissionFactory->createForNewEntity($this->getUser(), get_class($campaign), $campaign->getId(), $this->getConfig()->GetSetting('LAYOUT_DEFAULT'), $this->userGroupFactory) as $permission) {
+        foreach ($this->permissionFactory->createForNewEntity($this->getUser(), get_class($campaign), $campaign->getId(), $this->getConfig()->getSetting('LAYOUT_DEFAULT'), $this->userGroupFactory) as $permission) {
             /* @var Permission $permission */
             $permission->save();
         }
+
+        // Assign layouts
+        $this->assignLayout($campaign->campaignId);
 
         // Return
         $this->getState()->hydrate([
@@ -332,13 +330,45 @@ class Campaign extends Base
     {
         $campaign = $this->campaignFactory->getById($campaignId);
 
+        $tags = '';
+
+        $arrayOfTags = array_filter(explode(',', $campaign->tags));
+        $arrayOfTagValues = array_filter(explode(',', $campaign->tagValues));
+
+        for ($i=0; $i<count($arrayOfTags); $i++) {
+            if (isset($arrayOfTags[$i]) && (isset($arrayOfTagValues[$i]) && $arrayOfTagValues[$i] != 'NULL' )) {
+                $tags .= $arrayOfTags[$i] . '|' . $arrayOfTagValues[$i];
+                $tags .= ',';
+            } else {
+                $tags .= $arrayOfTags[$i] . ',';
+            }
+        }
+
         if (!$this->getUser()->checkEditable($campaign))
             throw new AccessDeniedException();
+
+        // Load layouts
+        $layouts = [];
+        foreach ($this->layoutFactory->getByCampaignId($campaignId, false) as $layout) {
+            if (!$this->getUser()->checkViewable($layout)) {
+                // Hide all layout details from the user
+                $emptyLayout = $this->layoutFactory->createEmpty();
+                $emptyLayout->layoutId = $layout->layoutId;
+                $emptyLayout->layout = __('Layout');
+                $emptyLayout->locked = true;
+
+                $layouts[] = $emptyLayout;
+            } else {
+                $layouts[] = $layout;
+            }
+        }
 
         $this->getState()->template = 'campaign-form-edit';
         $this->getState()->setData([
             'campaign' => $campaign,
-            'help' => $this->getHelp()->link('Campaign', 'Edit')
+            'layouts' => $layouts,
+            'help' => $this->getHelp()->link('Campaign', 'Edit'),
+            'tags' => $tags
         ]);
     }
 
@@ -385,6 +415,9 @@ class Campaign extends Base
         $campaign->save([
             'saveTags' => true
         ]);
+
+        // Assign layouts
+        $this->assignLayout($campaign->campaignId);
 
         // Return
         $this->getState()->hydrate([
@@ -583,6 +616,20 @@ class Campaign extends Base
             if (!$this->getUser()->checkViewable($layout) && !$campaign->isLayoutAssigned($layout))
                 throw new AccessDeniedException(__('You do not have permission to assign the provided Layout'));
 
+            // Make sure we're not a draft
+            if ($layout->isChild())
+                throw new InvalidArgumentException('Cannot assign a Draft Layout to a Campaign', 'layoutId');
+
+            // Make sure this layout is not a template - for API, in web ui templates are not available for assignment
+            $tags = $layout->tags;
+            $tagsArray = explode(',', $tags);
+
+            foreach ($tagsArray as $tag) {
+                if ($tag === 'template') {
+                    throw new InvalidArgumentException('Cannot assign a Template to a Campaign', 'layoutId');
+                }
+            }
+
             // Set the Display Order
             $layout->displayOrder = $this->getSanitizer()->getInt('displayOrder', $object);
 
@@ -615,8 +662,9 @@ class Campaign extends Base
         }
 
         // Save the campaign
-        if ($changesMade)
-            $campaign->save(['validate' => false]);
+        if ($changesMade) {
+            $campaign->save(['validate' => false, 'saveTags' => false]);
+        }
 
         // Return
         $this->getState()->hydrate([

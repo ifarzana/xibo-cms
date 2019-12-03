@@ -1,0 +1,459 @@
+{# 
+    Common files ( translations and other common variables )
+        Add by including in another twig file javaScript block: {% include "common.twig" %}
+#}
+{% block javaScript %} 
+    <script type="text/javascript">
+
+        // COMMON VARIABLES
+        const serverMode = "{{ settings.SERVER_MODE }}";
+        let playlistRegionColouring =  "{{ settings.REGION_OPTIONS_COLOURING }}";
+        let libraryUpload = {{ libraryUpload|json_encode|raw }};
+        var librarySearchUrl = "{{ urlFor("library.search") }}";
+        var libraryAddUrl = "{{ urlFor("library.add") }}";
+        var imageDownloadUrl = "{{ urlFor("library.download") }}?preview=1";
+        var uploadFormUpdateAllDefault = {% if settings.LIBRARY_MEDIA_UPDATEINALL_CHECKB == 1 %}true{% else %}false{% endif %};
+        var uploadFormDeleteOldDefault = {% if settings.LIBRARY_MEDIA_DELETEOLDVER_CHECKB == 1 %}true{% else %}false{% endif %};
+        var tooltipDelay = {'show': 250, 'hide': 0};
+        
+        // Save navbar position
+        var navbarPosition = 'vertical';
+        {% set horizontalNav = currentUser.getOptionValue("navigationMenuPosition", theme.getSetting("NAVIGATION_MENU_POSITION", "vertical")) == "horizontal" %}
+        {% if horizontalNav %}
+            navbarPosition = 'horizontal';
+        {% endif %}
+
+        // MODULES LIST
+        var modulesList = [];
+        {% for module in modules %}
+            modulesList.push({{ module.getModule()|json_encode|raw }});
+        {% endfor %}
+
+        // USERS LIST
+        var usersList = [];
+        {% for user in users %}
+            usersList.push({{ user|json_encode|raw }});
+        {% endfor %}
+
+        // Structure with API URLs
+        let urlsForApi = {
+            layout: {
+                designer: {
+                    url: "{{ urlFor("layout.designer") }}",
+                    type: 'GET'
+                },
+                get: {
+                    url: "{{ urlFor("layout.search") }}",
+                    type: 'GET'
+                },
+                getForm: {
+                    url: "{{ urlFor("layout.background.form") }}",
+                    type: 'GET'
+                },
+                saveForm: {
+                    url: "{{ urlFor("layout.edit.background") }}",
+                    type: 'PUT'
+                },
+                downloadBackground: {
+                    url: "{{ urlFor("layout.download.background") }}",
+                    type: 'GET'
+                },
+                preview: {
+                    url: "{{ urlFor("layout.preview") }}",
+                    type: 'GET'
+                },
+                checkout: {
+                    url: "{{ urlFor("layout.checkout") }}",
+                    type: 'PUT'
+                }, 
+                publish: {
+                    url: "{{ urlFor("layout.publish") }}",
+                    type: 'PUT'
+                },
+                list: {
+                    url: "{{ urlFor("layout.view") }}"
+                },
+                status: {
+                    url: "{{ urlFor("layout.status") }}"
+                },
+                designer: {
+                    url: "{{ urlFor("layout.designer") }}"
+                },
+                schedule: {
+                    url: "{{ urlFor("schedulenow.now.form", {from: 'Campaign'}) }}",
+                    type: 'GET'
+                },
+                saveTemplate: {
+                    url: "{{ urlFor("template.from.layout.form") }}",
+                    type: 'GET'
+                },
+                publishForm: {
+                    url: "{{ urlFor("layout.publish.form") }}",
+                    type: 'GET'
+                }
+            },
+            region: {
+                transform: {
+                    url: "{{ urlFor("region.position.all") }}",
+                    type: 'PUT',
+                    useMainObjectId: true
+                },
+                getForm: {
+                    url: "{{ urlFor("region.edit.form") }}",
+                    type: 'GET'
+                },
+                saveForm: {
+                    url: "{{ urlFor("region.edit") }}",
+                    type: 'PUT'
+                },
+                create: {
+                    url: "{{ urlFor("region.add") }}",
+                    type: 'POST',
+                    useMainObjectId: true
+                },
+                delete: {
+                    url: "{{ urlFor("region.delete") }}",
+                    type: 'DELETE'
+                },
+                preview: {
+                    url: "{{ urlFor("region.preview") }}",
+                    type: 'GET'
+                },
+                getPermissions:  {
+                    url: "{{ urlFor("user.permissions.form", {entity: 'Region'}) }}",
+                    type: 'GET'
+                }
+            },
+            widget: {
+                getForm: {
+                    url: "{{ urlFor("module.widget.edit.form") }}",
+                    type: 'GET'
+                },
+                saveForm: {
+                    url: "{{ urlFor("module.widget.edit") }}",
+                    type: 'PUT'
+                },
+                preview: {
+                    url: "{{ urlFor("region.preview") }}",
+                    type: 'GET'
+                },
+                addForm: {
+                    url: "{{ urlFor("module.widget.add.form") }}",
+                    type: 'GET'
+                },
+                add: {
+                    url: "{{ urlFor("module.widget.add") }}",
+                    type: 'POST'
+                },
+                delete: {
+                    url: "{{ urlFor("module.widget.delete") }}",
+                    type: 'DELETE'
+                },
+                getAudio: {
+                    url: "{{ urlFor("module.widget.audio.form") }}",
+                    type: 'GET'
+                },
+                saveAudio:  {
+                    url: "{{ urlFor("module.widget.audio") }}",
+                    type: 'PUT'
+                },
+                getExpiry: {
+                    url: "{{ urlFor("module.widget.expiry.form") }}",
+                    type: 'GET'
+                },
+                saveExpiry:  {
+                    url: "{{ urlFor("module.widget.expiry") }}",
+                    type: 'PUT'
+                },
+                getTransition: {
+                    url: "{{ urlFor("module.widget.transition.edit.form") }}",
+                    type: 'GET'
+                },
+                saveTransition:  {
+                    url: "{{ urlFor("module.widget.transition.edit") }}",
+                    type: 'PUT'
+                },
+                getPermissions:  {
+                    url: "{{ urlFor("user.permissions.form", {entity: 'Widget'}) }}",
+                    type: 'GET'
+                }
+            },
+            library: {
+                get: {
+                    url: "{{ urlFor("library.search") }}",
+                    type: 'GET'
+                }
+            },
+            playlist: {
+                get: {
+                    url: "{{ urlFor("playlist.search") }}",
+                    type: 'GET'
+                },
+                getForm: {
+                    url: "{{ urlFor("playlist.edit.form") }}",
+                    type: 'GET'
+                },
+                addMedia: {
+                    url: "{{ urlFor("playlist.library.assign") }}",
+                    type: 'POST'
+                },
+                addWidgetForm: {
+                    url: "{{ urlFor("module.widget.add.form") }}",
+                    type: 'GET'
+                },
+                addWidget: {
+                    url: "{{ urlFor("module.widget.add") }}",
+                    type: 'POST'
+                },
+                preview: {
+                    url: "{{ urlFor("region.preview") }}",
+                    type: 'GET'
+                },
+                order: {
+                    url: "{{ urlFor("playlist.order") }}",
+                    type: 'POST'
+                }
+            },
+            user: {
+                getPref: {
+                    url: "{{ urlFor("user.pref") }}",
+                    type: 'GET'
+                },
+                savePref: {
+                    url: "{{ urlFor("user.pref") }}",
+                    type: 'POST'
+                },
+                permissions: {
+                    url: "{{ urlFor("user.permissions.form") }}",
+                    type: 'GET'
+                }
+            },
+            media: {
+                isUsed: {
+                    url: "{{ urlFor("library.isused") }}",
+                    type: 'GET'
+                }
+            }
+        };
+
+        {% autoescape "js" %}
+            // TRANSLATIONS
+            var editorsTrans = {
+                deleteTitle: "{% trans "Delete %obj%" %}",
+                deleteConfirm: "{% trans "Are you sure? All changes related to this object will be erased" %}",
+                yes: "{% trans "Yes" %}",
+                no: "{% trans "No" %}",
+                allChangesSaved: "{% trans "All changes saved!" %}",
+                back: "{% trans "Back" %}",
+                loadPropertyForObject: "{% trans "Load %prop% for %obj%" %}",
+                loading: "{% trans "Loading" %}",
+                resetTourNotification: "{% trans "Layout Designer Tour enabled!" %}",
+                tooltipsDisabled: "{% trans "Tooltips disabled!" %}",
+                tooltipsEnabled: "{% trans "Tooltips enabled!" %}"
+            };
+
+            var uploadTrans = {
+                uploadMessage: "{% trans "Upload media" %}",
+                addFiles: "{% trans "Add files" %}",
+                startUpload: "{% trans "Start upload" %}",
+                cancelUpload: "{% trans "Cancel upload" %}",
+                processing: "{% trans "Processing..." %}",
+                viewLibrary: "{% trans "View Library" %}",
+            };
+
+            var deleteMenuTrans = {
+                mainMessage: "{% trans "Are you sure you want to remove this %obj%? This action cannot be undone." %}",
+                infoDeleteMessage: "{% trans "This widget is linked to Media in the Library which is also in use elsewhere. If this should be deleted then please do so from the Library page." %}",
+                deleteMediaFromLibraryTitle: "{% trans "Also delete from the Library?" %}",
+                deleteMediaFromLibraryMessage: "{% trans "This widget is linked to Media in the Library. Check this option to also delete that Media." %}"
+            };
+
+            var contextMenuTrans = {
+                editAudio: "{% trans "Edit Attached Audio" %}",
+                editExpiry: "{% trans "Edit Expiry Dates" %}",
+                editTransIn: "{% trans "Edit Transition In" %}",
+                editTransOut: "{% trans "Edit Transition Out" %}",
+                editPermissions: "{% trans "Edit Permissions" %}",
+                moveLeft: "{% trans "Move one step left" %}",
+                moveRight: "{% trans "Move one step right" %}",
+                moveTopLeft: "{% trans "Move to the top left" %}",
+                moveTopRight: "{% trans "Move to the top right" %}",
+                delete: "{% trans "Delete" %}"
+            };
+
+            var propertiesPanelTrans = {
+                width: "{% trans "Width" %}",
+                height: "{% trans "Height" %}",
+                scale: "{% trans "Scale" %}"
+            };
+
+            var toolbarTrans = {
+                toolbarTagsMessage: "{% trans "%tagCount% tags" %}",
+                deleteObject: "{% trans "Delete selected %object%" %}",
+                changeLayout: "{% trans "Change Layout" %}",
+                layoutOptions: "{% trans "Layout Designer options" %}",
+                displayTooltipsName: "{% trans "Tooltips?" %}",
+                displayTooltipsTitle: "{% trans "Show/Hide Tooltips" %}",
+                resetTour: "{% trans "Show tour!" %}",
+                resetTourTitle: "{% trans "Show Layout Designer tour" %}",
+                createNewTab: "{% trans "Library Media Search" %}",
+                closeAllTabs: "{% trans "Close all tabs" %}",
+                actions: "{% trans "Actions" %}",
+                search: "{% trans "Search" %}",
+                add: "{% trans "Add" %}",
+                grab: "{% trans "Grab" %}",
+                noResults: "{% trans "No results for the filter!" %}",
+                searchFilters: {
+                    name: "{% trans "Name" %}",
+                    tag: "{% trans "Tag" %}",
+                    type: "{% trans "Type" %}",
+                    owner: "{% trans "Owner" %}"
+                },
+                tabName: "{% trans "Library Search %tagId%" %}",
+                tableHeader: {
+                    toolsName: "{% trans "Tools" %}",
+                    id: "{% trans "Id"%}",
+                    name: "{% trans "Name"%}",
+                    type: "{% trans "Type"%}",
+                    tags: "{% trans "Tags"%}",
+                    thumbnail: "{% trans "Thumbnail"%}"
+                },
+                menuItems: {
+                    toolsName: "{% trans "Tools" %}",
+                    toolsTitle: "{% trans "Layout Designer tools" %}",
+                    widgetsName: "{% trans "Widgets" %}",
+                    widgetsTitle: "{% trans "Layout Designer widgets" %}"
+                },
+                tools: {
+                    region: {
+                        name: "{% trans "Region" %}",
+                        description: "{% trans "Add a Region" %}"
+                    },
+                    audio: {
+                        name: "{% trans "Audio" %}",
+                        description: "{% trans "Upload Audio files to assign to Widgets" %}"
+                    },
+                    expiry: {
+                        name: "{% trans "Expiry Dates" %}",
+                        description: "{% trans "Enter start and end times for Widgets" %}"
+                    },
+                    transitionIn: {
+                        name: "{% trans "Transition In" %}",
+                        description: "{% trans "Apply a Transition type for the start of a media item" %}"
+                    },
+                    transitionOut: {
+                        name: "{% trans "Transition Out" %}",
+                        description: "{% trans "Apply a Transition type for the end of a media item" %}"
+                    },
+                    permissions: {
+                        name: "{% trans "Permissions" %}",
+                        description: "{% trans "Set View, Edit and Delete Permissions for Widgets and Regions" %}"
+                    }
+                },
+                window: {
+                    drag: "{% trans "Move Window" %}",
+                    close: "{% trans "Close Window" %}",
+                    minimise: "{% trans "Minimise Window" %}"
+                }
+            };
+
+            var historyManagerTrans = {
+                revert: {
+                    saveForm: "{% trans "Revert %target% form save" %}",
+                    order: "{% trans "Revert %target% order" %}",
+                    transform: "{% trans "Revert %target% transformation" %}",
+                    addWidget: "{% trans "Revert %target% creation" %}",
+                    addMedia: "{% trans "Revert %target% assignment" %}",
+                    create: "{% trans "Revert %target% creation" %}"
+                }
+            };
+
+            var playlistAddFilesTrans = {
+                uploadMessage: "{% trans "Replace" %}",
+                addFiles: "{% trans "Add Replacement" %}",
+                startUpload: "{% trans "Start Replace" %}",
+                cancelUpload: "{% trans "Cancel Replace" %}",
+                processing: "{% trans "Processing..." %}",
+                updateInLayouts: {
+                    title: "{% trans "Update this media in all layouts it is assigned to?" %}",
+                    helpText: "{% trans "Note: It will only be updated in layouts you have permission to edit." %}"
+                },
+                deleteOldRevisions: {
+                    title: "{% trans "Delete the old version?" %}",
+                    helpText: "{% trans "Completely remove the old version of this media item if a new file is being uploaded." %}"
+                }
+            };
+
+            var errorMessagesTrans = {
+                error: "{% trans "ERROR" %}",
+                loadingLayout: "{% trans "There was a problem loading the layout!" %}",
+                loadingPlaylist: "{% trans "There was a problem loading the layout!" %}",
+                userSavePreferencesFailed: "{% trans "User save preferences failed!" %}",
+                userLoadPreferencesFailed: "{% trans "User load preferences failed!" %}",
+                libraryLoadFailed: "{% trans "Library load failed!" %}",
+                formLoadFailed: "{% trans "Form load failed!" %}",
+                revertFailed: "{% trans "Revert failed: %error%" %}",
+                saveOrderFailed: "{% trans "Save order failed: %error%" %}",
+                deleteFailed: "{% trans "Object delete failed: %error%" %}",
+                saveAllChangesFailed: "{% trans "Save all changes failed!" %}",
+                removeAllChangesFailed: "{% trans "Remove all changes failed!!" %}",
+                addMediaFailed: "{% trans "Add media failed: %error%" %}",
+                addModuleFailed: "{% trans "Add module failed: %error%" %}",
+                createRegionFailed: "{% trans "Create region failed: %error%" %}",
+                listOrderNotChanged: "{% trans "List order not Changed!" %}",
+                playlistOrderSave: "{% trans "Playlist save order failed!" %}",
+                getFormFailed: "{% trans "Get form failed!" %}",
+                transformRegionFailed: "{% trans "Transform region failed!" %}",
+                previewFailed: "{% trans "Preview failed!" %}",
+                noWidgetsNeedSaving: "{% trans "No widgets need saving!" %}"
+            };
+
+            var datasetQueryBuilderTranslations = {
+                ascTitle: "{% trans "Ascending" %}",
+                descTitle: "{% trans "Descending" %}",
+                filterOptions: [
+                    {
+                        id: "starts-with",
+                        value: "{% trans "starts with" %}"
+                    }, {
+                        id: "ends-with",
+                        value: "{% trans "ends with" %}"
+                    }, {
+                        id: "contains",
+                        value: "{% trans "contains" %}"
+                    }, {
+                        id: "equals",
+                        value: "{% trans "equals" %}"
+                    }, {
+                        id: "not-starts-with",
+                        value: "{% trans "does not start with" %}"
+                    }, {
+                        id: "not-ends-with",
+                        value: "{% trans "does not end with" %}"
+                    }, {
+                        id: "not-contains",
+                        value: "{% trans "does not contain" %}"
+                    }, {
+                        id: "not-equals",
+                        value: "{% trans "does not equal" %}"
+                    }, {
+                        id: "greater-than",
+                        value: "{% trans "greater than" %}"
+                    }, {
+                        id: "less-than",
+                        value: "{% trans "less than" %}"
+                    }
+                ],
+                filterOperatorOptions: [
+                    {
+                        id: "OR",
+                        value: "{% trans "Or" %}"
+                    }, {
+                        id: "AND",
+                        value: "{% trans "And" %}"
+                    }
+                ]
+            };
+        {% endautoescape %}
+    </script>
+{% endblock %}

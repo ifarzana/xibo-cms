@@ -1,11 +1,24 @@
 <?php
-/*
- * Spring Signage Ltd - http://www.springsignage.com
- * Copyright (C) 2015 Spring Signage Ltd
- * (ScheduleFactory.php)
+/**
+ * Copyright (C) 2019 Xibo Signage Ltd
+ *
+ * Xibo - Digital Signage - http://www.xibo.org.uk
+ *
+ * This file is part of Xibo.
+ *
+ * Xibo is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * any later version.
+ *
+ * Xibo is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with Xibo.  If not, see <http://www.gnu.org/licenses/>.
  */
-
-
 namespace Xibo\Factory;
 
 
@@ -44,6 +57,12 @@ class ScheduleFactory extends BaseFactory
     /** @var DayPartFactory */
     private $dayPartFactory;
 
+    /** @var  UserFactory */
+    private $userFactory;
+
+    /** @var  ScheduleReminderFactory */
+    private $scheduleReminderFactory;
+
     /**
      * Construct a factory
      * @param StorageServiceInterface $store
@@ -54,8 +73,10 @@ class ScheduleFactory extends BaseFactory
      * @param DateServiceInterface $date
      * @param DisplayGroupFactory $displayGroupFactory
      * @param DayPartFactory $dayPartFactory
+     * @param UserFactory $userFactory
+     * @param ScheduleReminderFactory $scheduleReminderFactory
      */
-    public function __construct($store, $log, $sanitizerService, $config, $pool, $date, $displayGroupFactory, $dayPartFactory)
+    public function __construct($store, $log, $sanitizerService, $config, $pool, $date, $displayGroupFactory, $dayPartFactory, $userFactory, $scheduleReminderFactory)
     {
         $this->setCommonDependencies($store, $log, $sanitizerService);
         $this->config = $config;
@@ -63,6 +84,8 @@ class ScheduleFactory extends BaseFactory
         $this->dateService = $date;
         $this->displayGroupFactory = $displayGroupFactory;
         $this->dayPartFactory = $dayPartFactory;
+        $this->userFactory = $userFactory;
+        $this->scheduleReminderFactory = $scheduleReminderFactory;
     }
 
     /**
@@ -78,7 +101,9 @@ class ScheduleFactory extends BaseFactory
             $this->pool,
             $this->dateService,
             $this->displayGroupFactory,
-            $this->dayPartFactory
+            $this->dayPartFactory,
+            $this->userFactory,
+            $this->scheduleReminderFactory
         );
     }
 
@@ -153,14 +178,12 @@ class ScheduleFactory extends BaseFactory
 
         // We dial the fromDt back to the top of the day, so that we include dayPart events that start on this
         // day
-        $adjustedFromDt = clone $fromDt;
-
         $params = array(
-            'fromDt' => $adjustedFromDt->startOfDay()->format('U'),
+            'fromDt' => $fromDt->copy()->startOfDay()->format('U'),
             'toDt' => $toDt->format('U')
         );
 
-        $this->getLog()->debug('Get events for XMDS - with options: ' . json_encode($options));
+        $this->getLog()->debug('Get events for XMDS: fromDt[' . $params['fromDt'] . '], toDt[' . $params['toDt'] . '], with options: ' . json_encode($options));
 
         // Add file nodes to the $fileElements
         // Firstly get all the scheduled layouts
@@ -175,6 +198,7 @@ class ScheduleFactory extends BaseFactory
                 schedule.recurrence_detail AS recurrenceDetail,
                 schedule.recurrence_range AS recurrenceRange,
                 schedule.recurrenceRepeatsOn,
+                schedule.recurrenceMonthlyRepeatsOn,
                 schedule.lastRecurrenceWatermark,
                 schedule.eventId, 
                 schedule.is_priority AS isPriority,
@@ -183,6 +207,8 @@ class ScheduleFactory extends BaseFactory
                 `schedule`.campaignId,
                 `schedule`.commandId,
                 schedule.syncTimezone,
+                schedule.syncEvent,
+                schedule.shareOfVoice,
                 `campaign`.campaign,
                 `command`.command,
                 `lkscheduledisplaygroup`.displayGroupId,
@@ -215,6 +241,7 @@ class ScheduleFactory extends BaseFactory
                 LEFT OUTER JOIN `layout`
                 ON lkcampaignlayout.LayoutID = layout.LayoutID
                   AND layout.retired = 0
+                  AND layout.parentId IS NULL
                 LEFT OUTER JOIN `command`
                 ON `command`.commandId = `schedule`.commandId
         ';
@@ -267,6 +294,7 @@ class ScheduleFactory extends BaseFactory
             `schedule`.recurrence_detail AS recurrenceDetail,
             `schedule`.recurrence_range AS recurrenceRange,
             `schedule`.recurrenceRepeatsOn,
+            `schedule`.recurrenceMonthlyRepeatsOn,
             `schedule`.lastRecurrenceWatermark,
             campaign.campaignId,
             campaign.campaign,
@@ -274,6 +302,8 @@ class ScheduleFactory extends BaseFactory
             `command`.command,
             `schedule`.dayPartId,
             `schedule`.syncTimezone,
+            `schedule`.syncEvent,
+            `schedule`.shareOfVoice,
             `daypart`.isAlways,
             `daypart`.isCustom
           FROM `schedule`
@@ -347,16 +377,17 @@ class ScheduleFactory extends BaseFactory
 
         // Restrict to mediaId - meaning layout schedules of which the layouts contain the selected mediaId
         if ($this->getSanitizer()->getInt('mediaId', $filterBy) !== null) {
+            //TODO: handle sub-playlists
             $sql .= '
                 AND schedule.campaignId IN (
                     SELECT `lkcampaignlayout`.campaignId
                       FROM `lkwidgetmedia`
                        INNER JOIN `widget`
                        ON `widget`.widgetId = `lkwidgetmedia`.widgetId
-                       INNER JOIN `lkregionplaylist`
-                       ON `lkregionplaylist`.playlistId = `widget`.playlistId
+                       INNER JOIN `playlist`
+                       ON `playlist`.playlistId = `widget`.playlistId
                        INNER JOIN `region`
-                       ON `region`.regionId = `lkregionplaylist`.regionId
+                       ON `region`.regionId = `playlist`.regionId
                        INNER JOIN layout
                        ON layout.LayoutID = region.layoutId
                        INNER JOIN `lkcampaignlayout`
@@ -378,7 +409,7 @@ class ScheduleFactory extends BaseFactory
             $sql .= 'ORDER BY ' . implode(',', $sortOrder);
 
         foreach ($this->getStore()->select($sql, $params) as $row) {
-            $entries[] = $this->createEmpty()->hydrate($row, ['intProperties' => ['isPriority', 'syncTimezone', 'isAlways', 'isCustom']]);
+            $entries[] = $this->createEmpty()->hydrate($row, ['intProperties' => ['isPriority', 'syncTimezone', 'isAlways', 'isCustom', 'syncEvent', 'recurrenceMonthlyRepeatsOn']]);
         }
 
         return $entries;

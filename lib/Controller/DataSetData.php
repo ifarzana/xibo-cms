@@ -11,6 +11,7 @@ namespace Xibo\Controller;
 
 //use Xibo\Entity\DataSetColumn;
 use Xibo\Exception\AccessDeniedException;
+use Xibo\Exception\InvalidArgumentException;
 use Xibo\Exception\NotFoundException;
 use Xibo\Exception\XiboException;
 use Xibo\Factory\DataSetFactory;
@@ -94,6 +95,8 @@ class DataSetData extends Base
      *      description="successful operation"
      *  )
      * )
+     *
+     * @throws \Xibo\Exception\XiboException
      */
     public function grid($dataSetId)
     {
@@ -122,17 +125,28 @@ class DataSetData extends Base
         // Work out the limits
         $filter = $this->gridRenderFilter(['filter' => $this->getSanitizer()->getParam('filter', $filter)]);
 
+        try {
+            $data = $dataSet->getData([
+                'order' => $sorting,
+                'start' => $filter['start'],
+                'size' => $filter['length'],
+                'filter' => $filter['filter']
+            ]);
+        } catch (\Exception $e) {
+            $data = ['exception' => __('Error getting DataSet data, failed with following message: ') . $e->getMessage()];
+            $this->getLog()->error('Error getting DataSet data, failed with following message: ' . $e->getMessage());
+            $this->getLog()->debug($e->getTraceAsString());
+        }
+
         $this->getState()->template = 'grid';
-        $this->getState()->setData($dataSet->getData([
-            'order' => $sorting,
-            'start' => $filter['start'],
-            'size' => $filter['length'],
-            'filter' => $filter['filter']
-        ]));
+        $this->getState()->setData($data);
 
         // Output the count of records for paging purposes
         if ($dataSet->countLast() != 0)
             $this->getState()->recordsTotal = $dataSet->countLast();
+
+        // Set this dataSet as being active
+        $dataSet->setActive();
     }
 
     /**
@@ -224,6 +238,8 @@ class DataSetData extends Base
                 }
 
                 $row[$column->heading] = $value;
+            } elseif ($column->dataSetColumnTypeId == 3) {
+                throw new InvalidArgumentException(__('Cannot add new rows to remote dataSet'), 'dataSetColumnTypeId');
             }
         }
 
@@ -267,7 +283,9 @@ class DataSetData extends Base
             if ($dataSetColumn->dataTypeId === 5) {
                 // Add this image object to my row
                 try {
-                    $row['__images'][$dataSetColumn->dataSetColumnId] = $this->mediaFactory->getById($row[$dataSetColumn->heading]);
+                    if (isset($row[$dataSetColumn->heading])) {
+                        $row['__images'][$dataSetColumn->dataSetColumnId] = $this->mediaFactory->getById($row[$dataSetColumn->heading]);
+                    }
                 } catch (NotFoundException $notFoundException) {
                     $this->getLog()->debug('DataSet ' . $dataSetId . ' references an image that no longer exists. ID is ' . $row[$dataSetColumn->heading]);
                 }
@@ -363,8 +381,11 @@ class DataSetData extends Base
                 }
                 else if ($column->dataTypeId == 5) {
                     // Media Id
-                    if ($value !== null)
+                    if (isset($value)) {
                         $value = $this->getSanitizer()->int($value);
+                    } else {
+                        $value = null;
+                    }
                 }
                 else {
                     // String
@@ -378,8 +399,11 @@ class DataSetData extends Base
             }
         }
 
-        // Use the data set object to add a row
-        $dataSet->editRow($rowId, $row);
+        // Use the data set object to edit a row
+        if ($row != [])
+            $dataSet->editRow($rowId, $row);
+        else
+            throw new InvalidArgumentException(__('Cannot edit data of remote columns'), 'dataSetColumnTypeId');
 
         // Save the dataSet
         $dataSet->save(['validate' => false, 'saveColumns' => false]);

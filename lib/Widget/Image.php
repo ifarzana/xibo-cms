@@ -23,8 +23,12 @@ namespace Xibo\Widget;
 use Intervention\Image\Exception\NotReadableException;
 use Intervention\Image\ImageManagerStatic as Img;
 use Respect\Validation\Validator as v;
-use Xibo\Exception\NotFoundException;
+use Xibo\Exception\InvalidArgumentException;
 
+/**
+ * Class Image
+ * @package Xibo\Widget
+ */
 class Image extends ModuleWidget
 {
     /** @inheritdoc */
@@ -49,63 +53,77 @@ class Image extends ModuleWidget
         $this->setOption('scaleType', $this->getSetting('defaultScaleTypeId', 'center'));
     }
 
+
     /**
-     * Validate
+     * Javascript functions for the layout designer
      */
-    public function validate()
+    public function layoutDesignerJavaScript()
     {
-        // Validate
-        if (!v::intType()->min(1, true)->validate($this->getDuration()))
-            throw new \InvalidArgumentException(__('You must enter a duration.'));
+        // We use the same javascript as the data set view designer
+        return 'image-designer-javascript';
     }
 
     /**
      * Edit an Image Widget
-     * @SWG\Post(
+     * @SWG\Put(
      *  path="/playlist/widget/image/{playlistId}",
      *  operationId="WidgetImageEdit",
      *  tags={"widget"},
      *  summary="Parameters for editing existing image on a layout",
-     *  description="Parameters for editing existing image on a layout, for adding new images, please refer to POST /library documentation",
+     *  description="Parameters for editing existing image on a layout, for adding new images, please refer to POST /library documentation. This call will replace existing Widget object, all not supplied parameters will be set to default.",
+     *  @SWG\Parameter(
+     *      name="playlistId",
+     *      in="path",
+     *      description="The Playlist ID",
+     *      type="integer",
+     *      required=true
+     *  ),
      *  @SWG\Parameter(
      *      name="name",
      *      in="formData",
-     *      description="Edit only - Optional Widget Name",
+     *      description="Optional Widget Name",
      *      type="string",
      *      required=false
      *  ),
      *  @SWG\Parameter(
      *      name="duration",
      *      in="formData",
-     *      description="Edit Only - The Widget Duration",
+     *      description="The Widget Duration",
      *      type="integer",
      *      required=false
      *  ),
      *  @SWG\Parameter(
      *      name="useDuration",
      *      in="formData",
-     *      description="Edit only (0, 1) Select 1 only if you will provide duration parameter as well",
+     *      description="Select 1 only if you will provide duration parameter as well",
      *      type="integer",
      *      required=false
      *  ),
      *  @SWG\Parameter(
      *      name="scaleTypeId",
      *      in="formData",
-     *      description="Edit only - Select scale type available options: center, stretch",
+     *      description="Select scale type available options: center, stretch",
      *      type="string",
      *      required=false
      *   ),
      *  @SWG\Parameter(
      *      name="alignId",
      *      in="formData",
-     *      description="Edit only - Horizontal alignment - left, center, bottom",
+     *      description="Horizontal alignment - left, center, bottom",
      *      type="string",
      *      required=false
      *   ),
      *  @SWG\Parameter(
      *      name="valignId",
      *      in="formData",
-     *      description="Edit only - Vertical alignment - top, middle, bottom",
+     *      description="Vertical alignment - top, middle, bottom",
+     *      type="string",
+     *      required=false
+     *   ),
+     *  @SWG\Parameter(
+     *      name="enableStat",
+     *      in="formData",
+     *      description="The option (On, Off, Inherit) to enable the collection of Widget Proof of Play statistics",
      *      type="string",
      *      required=false
      *   ),
@@ -120,6 +138,8 @@ class Image extends ModuleWidget
      *      )
      *  )
      * )
+     *
+     * @throws \Xibo\Exception\XiboException
      */
     public function edit()
     {
@@ -130,18 +150,13 @@ class Image extends ModuleWidget
         $this->setOption('scaleType', $this->getSanitizer()->getString('scaleTypeId', 'center'));
         $this->setOption('align', $this->getSanitizer()->getString('alignId', 'center'));
         $this->setOption('valign', $this->getSanitizer()->getString('valignId', 'middle'));
+        $this->setOption('enableStat', $this->getSanitizer()->getString('enableStat'));
 
-        $this->validate();
+        $this->isValid();
         $this->saveWidget();
     }
 
-    /**
-     * Preview code for a module
-     * @param int $width
-     * @param int $height
-     * @param int $scaleOverride The Scale Override
-     * @return string The Rendered Content
-     */
+    /** @inheritdoc */
     public function preview($width, $height, $scaleOverride = 0)
     {
         if ($this->module->previewEnabled == 0)
@@ -163,42 +178,31 @@ class Image extends ModuleWidget
         return $html;
     }
 
-    /**
-     * Hover preview
-     * @return string
-     */
-    public function hoverPreview()
-    {
-        // Default Hover window contains a thumbnail, media type and duration
-        $output = parent::hoverPreview();
-
-        try {
-            $output .= '<div class="hoverPreview">';
-            $output .= '    <img src="' . $this->getApp()->urlFor('module.getResource', ['regionId' => $this->region->regionId, 'id' => $this->getWidgetId()]) . '?preview=1&width=100&height=56&proportional=1&cache=1" alt="Hover Preview">';
-            $output .= '</div>';
-        } catch (NotFoundException $e) {
-            $this->getLog()->error('Cannot find image to show in HoverPreview. WidgetId: %d', $this->getWidgetId());
-        }
-
-        return $output;
-    }
-
     /** @inheritdoc */
     public function getResource($displayId = 0)
     {
         $this->getLog()->debug('Image Module: GetResource for ' . $this->getMediaId());
 
         $media = $this->mediaFactory->getById($this->getMediaId());
-        $libraryLocation = $this->getConfig()->GetSetting('LIBRARY_LOCATION');
+        $libraryLocation = $this->getConfig()->getSetting('LIBRARY_LOCATION');
         $filePath = $libraryLocation . $media->storedAs;
         $proportional = $this->getSanitizer()->getInt('proportional', 1) == 1;
         $preview = $this->getSanitizer()->getInt('preview', 0) == 1;
         $cache = $this->getSanitizer()->getInt('cache', 0) == 1;
         $width = intval($this->getSanitizer()->getDouble('width'));
         $height = intval($this->getSanitizer()->getDouble('height'));
+        $extension = explode('.', $media->storedAs)[1];
 
         // Preview or download?
         if ($preview) {
+
+            // We expect the preview to load, manipulate and output a thumbnail (even on error).
+            // therefore we need to end output buffering and wipe any output so far.
+            // this means that we do not buffer the image output into memory
+            while (ob_get_level() > 0) {
+                ob_end_clean();
+            }
+
             // Preview (we output the file to the browser with image headers)
             try {
                 // should we use a cache?
@@ -206,7 +210,7 @@ class Image extends ModuleWidget
                     // Not cached, or cache not required, lets load it again
                     Img::configure(array('driver' => 'gd'));
 
-                    $this->getLog()->debug('Preview Requested with Width and Height %d x %d', $width, $height);
+                    $this->getLog()->debug('Preview Requested with Width and Height '. $width . ' x ' . $height);
                     $this->getLog()->debug('Loading ' . $filePath);
 
                     // Load the image
@@ -236,11 +240,12 @@ class Image extends ModuleWidget
                     }
 
                     // Output the file
-                    echo $img->response();
+                    echo $img->encode($extension);
 
                 } else if ($cache) {
                     // File exists, output it directly
-                    echo Img::make($libraryLocation . 'tn_' . $media->storedAs)->response();
+                    $img = Img::make($libraryLocation . 'tn_' . $media->storedAs);
+                    echo $img->encode($extension);
                 }
             } catch (NotReadableException $notReadableException) {
                 $this->getLog()->debug($notReadableException->getTraceAsString());
@@ -256,22 +261,28 @@ class Image extends ModuleWidget
                     });
                 }
 
-                echo $img->response();
+                echo $img->encode();
             }
-        }
-        else {
+        } else {
             // Download the file
             $this->download();
         }
     }
 
-    /**
-     * Is this module valid
-     * @return int
-     */
+    /** @inheritdoc */
     public function isValid()
     {
-        // Yes
-        return 1;
+        if ($this->getMedia()->released == 0) {
+            $this->statusMessage = __('%s is pending conversion', $this->getMedia()->name);
+            return self::$STATUS_INVALID;
+        } elseif ($this->getMedia()->released == 2) {
+            $this->statusMessage = __('%s is too large, please replace it', $this->getMedia()->name);
+            return self::$STATUS_INVALID;
+        }
+
+        if (!v::intType()->min(1, true)->validate($this->getDuration()))
+            throw new InvalidArgumentException(__('You must enter a duration.'), 'duration');
+
+        return self::$STATUS_VALID;
     }
 }

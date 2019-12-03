@@ -21,10 +21,12 @@
 namespace Xibo\Xmds;
 
 use Intervention\Image\ImageManagerStatic as Img;
+use Jenssegers\Date\Date;
 use Xibo\Entity\Bandwidth;
 use Xibo\Entity\Display;
 use Xibo\Exception\NotFoundException;
 use Xibo\Exception\XiboException;
+use Xibo\Helper\Random;
 
 /**
  * Class Soap4
@@ -60,7 +62,7 @@ class Soap4 extends Soap
         $clientAddress = $this->getIp();
 
         // Check the serverKey matches
-        if ($serverKey != $this->getConfig()->GetSetting('SERVER_KEY'))
+        if ($serverKey != $this->getConfig()->getSetting('SERVER_KEY'))
             throw new \SoapFault('Sender', 'The Server key you entered does not match with the server key at this address');
 
         // Check the Length of the hardwareKey
@@ -87,7 +89,7 @@ class Soap4 extends Soap
 
             // Append the time
             $displayElement->setAttribute('date', $this->getDate()->getLocalDate($dateNow));
-            $displayElement->setAttribute('timezone', $this->getConfig()->GetSetting('defaultTimezone'));
+            $displayElement->setAttribute('timezone', $this->getConfig()->getSetting('defaultTimezone'));
 
             // Determine if we are licensed or not
             if ($display->licensed == 0) {
@@ -101,18 +103,84 @@ class Soap4 extends Soap
                 $displayElement->setAttribute('status', 0);
                 $displayElement->setAttribute('code', 'READY');
                 $displayElement->setAttribute('message', 'Display is active and ready to start.');
-                $displayElement->setAttribute('version_instructions', $display->versionInstructions);
 
                 // Display Settings
-                $settings = $display->getSettings();
+                $settings = $this->display->getSettings(['displayOverride' => true]);
 
                 // Create the XML nodes
                 foreach ($settings as $arrayItem) {
+                    // Upper case the setting name for windows
+                    $settingName = ($clientType == 'windows') ? ucfirst($arrayItem['name']) : $arrayItem['name'];
+
+                    $node = $return->createElement($settingName, (isset($arrayItem['value']) ? $arrayItem['value'] : $arrayItem['default']));
+
+                    if (isset($arrayItem['type'])) {
+                        $node->setAttribute('type', $arrayItem['type']);
+                    }
+
+                    // Patch download and update windows to make sure they are unix time stamps
+                    // XMDS schema 4 sent down unix time
+                    // https://github.com/xibosignage/xibo/issues/1791
+                    if (strtolower($arrayItem['name']) == 'downloadstartwindow'
+                        || strtolower($arrayItem['name']) == 'downloadendwindow'
+                        || strtolower($arrayItem['name']) == 'updatestartwindow'
+                        || strtolower($arrayItem['name']) == 'updateendwindow'
+                    ) {
+                        // Split by :
+                        $timeParts = explode(':', $arrayItem['value']);
+                        if ($timeParts[0] == '00' && $timeParts[1] == '00') {
+                            $arrayItem['value'] = 0;
+                        } else {
+                            $arrayItem['value'] = Date::now()->setTime(intval($timeParts[0]), intval($timeParts[1]));
+                        }
+                    }
 
                     $node = $return->createElement($arrayItem['name'], (isset($arrayItem['value']) ? $arrayItem['value'] : $arrayItem['default']));
                     $node->setAttribute('type', $arrayItem['type']);
                     $displayElement->appendChild($node);
                 }
+
+                // Player upgrades
+                $version = '';
+                try {
+                    $upgradeMediaId = $this->display->getSetting('versionMediaId', null, ['displayOverride' => true]);
+
+                    if ($clientType != 'windows' && $upgradeMediaId != null) {
+                        $version = $this->playerVersionFactory->getByMediaId($upgradeMediaId);
+
+                        if ($clientType == 'android') {
+                            $version = json_encode([
+                                'id' => $upgradeMediaId,
+                                'file' => $version->storedAs,
+                                'code' => $version->code
+                            ]);
+                        } elseif ($clientType == 'lg') {
+                            $version = json_encode([
+                                'id' => $upgradeMediaId,
+                                'file' => $version->storedAs,
+                                'code' => $version->code
+                            ]);
+                        } elseif ($clientType == 'sssp') {
+                            // Create a nonce and store it in the cache for this display.
+                            $nonce = Random::generateString();
+                            $cache = $this->getPool()->getItem('/playerVersion/' . $nonce);
+                            $cache->set($this->display->displayId);
+                            $cache->expiresAfter(86400);
+                            $this->getPool()->saveDeferred($cache);
+
+                            $version = json_encode([
+                                'id' => $upgradeMediaId,
+                                'file' => $version->storedAs,
+                                'code' => $version->code,
+                                'url' => str_replace('/xmds.php', '', Wsdl::getRoot()) . '/playersoftware/' . $nonce
+                            ]);
+                        }
+                    }
+                } catch (NotFoundException $notFoundException) {
+                    $this->getLog()->error('Non-existing version set on displayId ' . $this->display->displayId);
+                }
+
+                $displayElement->setAttribute('version_instructions', $version);
 
                 // Add some special settings
                 $nodeName = ($clientType == 'windows') ? 'DisplayName' : 'displayName';
@@ -138,9 +206,6 @@ class Soap4 extends Soap
                     // Append Local Time
                     $displayElement->setAttribute('localDate', $this->getDate()->getLocalDate($dateNow));
                 }
-
-                // Send Notification if required
-                $this->alertDisplayUp();
             }
 
         } catch (NotFoundException $e) {
@@ -151,11 +216,15 @@ class Soap4 extends Soap
                 $this->display = $display;
                 $display->display = $displayName;
                 $display->auditingUntil = 0;
-                $display->defaultLayoutId = $this->getConfig()->GetSetting('DEFAULT_LAYOUT', 4);
+                $display->defaultLayoutId = $this->getConfig()->getSetting('DEFAULT_LAYOUT');
                 $display->license = $hardwareKey;
-                $display->licensed = 0;
+                $display->licensed = $this->getConfig()->getSetting('DISPLAY_AUTO_AUTH', 0);
                 $display->incSchedule = 0;
                 $display->clientAddress = $this->getIp();
+
+                if (!$display->isDisplaySlotAvailable()) {
+                    $display->licensed = 0;
+                }
             }
             catch (\InvalidArgumentException $e) {
                 throw new \SoapFault('Sender', $e->getMessage());
@@ -163,9 +232,14 @@ class Soap4 extends Soap
 
             $displayElement->setAttribute('status', 1);
             $displayElement->setAttribute('code', 'ADDED');
-            $displayElement->setAttribute('message', 'Display added and is awaiting licensing approval from an Administrator.');
+            if ($display->licensed == 0)
+                $displayElement->setAttribute('message', 'Display added and is awaiting licensing approval from an Administrator.');
+            else
+                $displayElement->setAttribute('message', 'Display is active and ready to start.');
         }
 
+        // Send Notification if required
+        $this->alertDisplayUp();
 
         $display->lastAccessed = time();
         $display->loggedIn = 1;
@@ -196,7 +270,7 @@ class Soap4 extends Soap
      */
     function RequiredFiles($serverKey, $hardwareKey)
     {
-        $httpDownloads = ($this->getConfig()->GetSetting('SENDFILE_MODE') != 'Off');
+        $httpDownloads = ($this->getConfig()->getSetting('SENDFILE_MODE') != 'Off');
         return $this->doRequiredFiles($serverKey, $hardwareKey, $httpDownloads);
     }
 
@@ -223,22 +297,26 @@ class Soap4 extends Soap
         $chunkOffset = $this->getSanitizer()->int($chunkOffset);
         $chunkSize = $this->getSanitizer()->int($chunkSize);
 
-        $libraryLocation = $this->getConfig()->GetSetting("LIBRARY_LOCATION");
+        $libraryLocation = $this->getConfig()->getSetting("LIBRARY_LOCATION");
 
         // Check the serverKey matches
-        if ($serverKey != $this->getConfig()->GetSetting('SERVER_KEY'))
+        if ($serverKey != $this->getConfig()->getSetting('SERVER_KEY')) {
             throw new \SoapFault('Sender', 'The Server key you entered does not match with the server key at this address');
-
-        // Make sure we are sticking to our bandwidth limit
-        if (!$this->checkBandwidth())
-            throw new \SoapFault('Receiver', "Bandwidth Limit exceeded");
+        }
 
         // Authenticate this request...
-        if (!$this->authDisplay($hardwareKey))
+        if (!$this->authDisplay($hardwareKey)) {
             throw new \SoapFault('Receiver', "This display client is not licensed");
+        }
 
-        if ($this->display->isAuditing())
+        // Now that we authenticated the Display, make sure we are sticking to our bandwidth limit
+        if (!$this->checkBandwidth($this->display->displayId)) {
+            throw new \SoapFault('Receiver', "Bandwidth Limit exceeded");
+        }
+
+        if ($this->display->isAuditing()) {
             $this->getLog()->debug('hardwareKey: ' . $hardwareKey . ', fileId: ' . $fileId . ', fileType: ' . $fileType . ', chunkOffset: ' . $chunkOffset . ', chunkSize: ' . $chunkSize);
+        }
 
         try {
             if ($fileType == "layout") {
@@ -397,20 +475,24 @@ class Soap4 extends Soap
         $hardwareKey = $this->getSanitizer()->string($hardwareKey);
 
         // Check the serverKey matches
-        if ($serverKey != $this->getConfig()->GetSetting('SERVER_KEY'))
+        if ($serverKey != $this->getConfig()->getSetting('SERVER_KEY')) {
             throw new \SoapFault('Sender', 'The Server key you entered does not match with the server key at this address');
-
-        // Make sure we are sticking to our bandwidth limit
-        if (!$this->checkBandwidth())
-            throw new \SoapFault('Receiver', "Bandwidth Limit exceeded");
+        }
 
         // Auth this request...
-        if (!$this->authDisplay($hardwareKey))
+        if (!$this->authDisplay($hardwareKey)) {
             throw new \SoapFault('Receiver', 'This display client is not licensed');
+        }
+
+        // Now that we authenticated the Display, make sure we are sticking to our bandwidth limit
+        if (!$this->checkBandwidth($this->display->displayId)) {
+            throw new \SoapFault('Receiver', "Bandwidth Limit exceeded");
+        }
 
         // Important to keep this logging in place (status screen notification gets logged)
-        if ($this->display->isAuditing())
+        if ($this->display->isAuditing()) {
             $this->getLog()->debug($status);
+        }
 
         $this->logBandwidth($this->display->displayId, Bandwidth::$NOTIFYSTATUS, strlen($status));
 
@@ -421,7 +503,7 @@ class Soap4 extends Soap
         $this->display->lastCommandSuccess = $this->getSanitizer()->getCheckbox('lastCommandSuccess', $this->display->lastCommandSuccess, $status);
         $this->display->deviceName = $this->getSanitizer()->getString('deviceName', $this->display->deviceName, $status);
 
-        if ($this->getConfig()->GetSetting('DISPLAY_LOCK_NAME_TO_DEVICENAME') == 1 && $this->display->hasPropertyChanged('deviceName')) {
+        if ($this->getConfig()->getSetting('DISPLAY_LOCK_NAME_TO_DEVICENAME') == 1 && $this->display->hasPropertyChanged('deviceName')) {
             $this->display->display = $this->display->deviceName;
         }
 
@@ -442,6 +524,13 @@ class Soap4 extends Soap
 
         if ($currentLayoutId !== null) {
             $this->display->setCurrentLayoutId($this->getPool(), $currentLayoutId);
+        }
+
+        // Status Dialog
+        $statusDialog = $this->getSanitizer()->getString('statusDialog', null, $status);
+
+        if ($statusDialog !== null) {
+            $this->getLog()->alert($statusDialog);
         }
 
         // Touch the display record
@@ -480,22 +569,26 @@ class Soap4 extends Soap
         $needConversion = false;
 
         // Check the serverKey matches
-        if ($serverKey != $this->getConfig()->GetSetting('SERVER_KEY'))
+        if ($serverKey != $this->getConfig()->getSetting('SERVER_KEY')) {
             throw new \SoapFault('Sender', 'The Server key you entered does not match with the server key at this address');
-
-        // Make sure we are sticking to our bandwidth limit
-        if (!$this->checkBandwidth())
-            throw new \SoapFault('Receiver', "Bandwidth Limit exceeded");
+        }
 
         // Auth this request...
-        if (!$this->authDisplay($hardwareKey))
+        if (!$this->authDisplay($hardwareKey)) {
             throw new \SoapFault('Receiver', 'This display client is not licensed');
+        }
 
-        if ($this->display->isAuditing())
+        // Now that we authenticated the Display, make sure we are sticking to our bandwidth limit
+        if (!$this->checkBandwidth($this->display->displayId)) {
+            throw new \SoapFault('Receiver', "Bandwidth Limit exceeded");
+        }
+
+        if ($this->display->isAuditing()) {
             $this->getLog()->debug('Received Screen shot');
+        }
 
         // Open this displays screen shot file and save this.
-        $location = $this->getConfig()->GetSetting('LIBRARY_LOCATION') . 'screenshots/' . $this->display->displayId . '_screenshot.' . $screenShotFmt;
+        $location = $this->getConfig()->getSetting('LIBRARY_LOCATION') . 'screenshots/' . $this->display->displayId . '_screenshot.' . $screenShotFmt;
 
         foreach(array('imagick', 'gd') as $imgDriver) {
             Img::configure(array('driver' => $imgDriver));

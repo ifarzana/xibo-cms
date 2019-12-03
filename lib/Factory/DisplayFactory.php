@@ -201,7 +201,6 @@ class DisplayFactory extends BaseFactory
                   display.cidr,
                   ' . $functionPrefix . 'X(display.GeoLocation) AS latitude,
                   ' . $functionPrefix . 'Y(display.GeoLocation) AS longitude,
-                  display.version_instructions AS versionInstructions,
                   display.client_type AS clientType,
                   display.client_version AS clientVersion,
                   display.client_code AS clientCode,
@@ -211,14 +210,18 @@ class DisplayFactory extends BaseFactory
                   display.storageTotalSpace,
                   displaygroup.displayGroupId,
                   displaygroup.description,
+                  displaygroup.bandwidthLimit,
                   `display`.xmrChannel,
                   `display`.xmrPubKey,
                   `display`.lastCommandSuccess, 
-                  `display`.deviceName , 
-                  `display`.timeZone
+                  `display`.deviceName, 
+                  `display`.timeZone,
+                  `display`.overrideConfig,
+                  `display`.newCmsAddress,
+                  `display`.newCmsKey
               ';
 
-        if ($this->getSanitizer()->getCheckbox('showTags', $filterBy) === 1 && DBVERSION >= 134) {
+        if ($this->getSanitizer()->getCheckbox('showTags', $filterBy) === 1) {
             $select .= ', 
                 (
                   SELECT GROUP_CONCAT(DISTINCT tag) 
@@ -229,6 +232,17 @@ class DisplayFactory extends BaseFactory
                   GROUP BY lktagdisplaygroup.displayGroupId
                 ) AS tags
             ';
+
+            $select .= ", 
+                (
+                  SELECT GROUP_CONCAT(IFNULL(value, 'NULL')) 
+                    FROM tag 
+                      INNER JOIN lktagdisplaygroup 
+                      ON lktagdisplaygroup.tagId = tag.tagId 
+                   WHERE lktagdisplaygroup.displayGroupId = displaygroup.displayGroupID 
+                  GROUP BY lktagdisplaygroup.displayGroupId
+                ) AS tagValues
+            ";
         }
 
         $body = '
@@ -268,8 +282,14 @@ class DisplayFactory extends BaseFactory
             if ($this->getSanitizer()->getInt('displayProfileId', $filterBy) == -1) {
                 $body .= ' AND IFNULL(displayProfileId, 0) = 0 ';
             } else {
-                $body .= ' AND `display`.displayProfileId = :displayProfileId ';
+                $displayProfileSelected = $this->displayProfileFactory->getById($this->getSanitizer()->getInt('displayProfileId', $filterBy));
+                $displayProfileDefault = $this->displayProfileFactory->getDefaultByType($displayProfileSelected->type);
+
+                $body .= ' AND (`display`.displayProfileId = :displayProfileId OR (IFNULL(displayProfileId, :displayProfileDefaultId) = :displayProfileId AND display.client_type = :displayProfileType ) ) ';
+
                 $params['displayProfileId'] = $this->getSanitizer()->getInt('displayProfileId', $filterBy);
+                $params['displayProfileDefaultId'] = $displayProfileDefault->displayProfileId;
+                $params['displayProfileType'] = $displayProfileDefault->type;
             }
         }
 
@@ -293,25 +313,8 @@ class DisplayFactory extends BaseFactory
 
         // Filter by Display Name?
         if ($this->getSanitizer()->getString('display', $filterBy) != null) {
-            // Convert into commas
-            foreach (explode(',', $this->getSanitizer()->getString('display', $filterBy)) as $term) {
-
-                // convert into a space delimited array
-                $names = explode(' ', $term);
-
-                $i = 0;
-                foreach ($names as $searchName) {
-                    $i++;
-                    // Not like, or like?
-                    if (substr($searchName, 0, 1) == '-') {
-                        $body .= " AND  display.display NOT RLIKE (:search$i) ";
-                        $params['search' . $i] = ltrim(($searchName), '-');
-                    } else {
-                        $body .= " AND  display.display RLIKE (:search$i) ";
-                        $params['search' . $i] = $searchName;
-                    }
-                }
-            }
+            $terms = explode(',', $this->getSanitizer()->getString('display', $filterBy));
+            $this->nameFilter('display', 'display', $terms, $body, $params);
         }
 
         if ($this->getSanitizer()->getString('macAddress', $filterBy) != '') {
@@ -327,6 +330,35 @@ class DisplayFactory extends BaseFactory
         if ($this->getSanitizer()->getString('clientVersion', $filterBy) != '') {
             $body .= ' AND display.client_version LIKE :clientVersion ';
             $params['clientVersion'] = '%' . $this->getSanitizer()->getString('clientVersion', $filterBy) . '%';
+        }
+
+        if ($this->getSanitizer()->getString('clientType', $filterBy) != '') {
+            $body .= ' AND display.client_type = :clientType ';
+            $params['clientType'] = $this->getSanitizer()->getString('clientType', $filterBy);
+        }
+
+        if ($this->getSanitizer()->getString('clientCode', $filterBy) != '') {
+            $body .= ' AND display.client_code LIKE :clientCode ';
+            $params['clientCode'] = '%' . $this->getSanitizer()->getString('clientCode', $filterBy) . '%';
+        }
+
+        if ($this->getSanitizer()->getInt('mediaInventoryStatus', $filterBy) != '') {
+            if ($this->getSanitizer()->getInt('mediaInventoryStatus', $filterBy) === -1) {
+                $body .= ' AND display.mediaInventoryStatus <> 1 ';
+            } else {
+                $body .= ' AND display.mediaInventoryStatus = :mediaInventoryStatus ';
+                $params['mediaInventoryStatus'] = $this->getSanitizer()->getInt('mediaInventoryStatus', $filterBy);
+            }
+        }
+
+        if ($this->getSanitizer()->getInt('loggedIn', -1, $filterBy) != -1) {
+            $body .= ' AND display.loggedIn = :loggedIn ';
+            $params['loggedIn'] = $this->getSanitizer()->getInt('loggedIn', $filterBy);
+        }
+
+        if ($this->getSanitizer()->getInt('lastAccessed', $filterBy) !== null) {
+            $body .= ' AND display.lastAccessed > :lastAccessed ';
+            $params['lastAccessed'] = $this->getSanitizer()->getInt('lastAccessed', $filterBy);
         }
 
         // Exclude a group?
@@ -365,10 +397,10 @@ class DisplayFactory extends BaseFactory
                               FROM `lkwidgetmedia`
                                INNER JOIN `widget`
                                ON `widget`.widgetId = `lkwidgetmedia`.widgetId
-                               INNER JOIN `lkregionplaylist`
-                               ON `lkregionplaylist`.playlistId = `widget`.playlistId
+                               INNER JOIN `playlist`
+                               ON `playlist`.playlistId = `widget`.playlistId
                                INNER JOIN `region`
-                               ON `region`.regionId = `lkregionplaylist`.regionId
+                               ON `region`.regionId = `playlist`.regionId
                                INNER JOIN layout
                                ON layout.LayoutID = region.layoutId
                              WHERE lkwidgetmedia.mediaId = :mediaId
@@ -405,29 +437,60 @@ class DisplayFactory extends BaseFactory
                     INNER JOIN `lktagdisplaygroup`
                     ON `lktagdisplaygroup`.tagId = tag.tagId
                 ";
-                $i = 0;
-                foreach (explode(',', $tagFilter) as $tag) {
-                    $i++;
 
-                    if ($i == 1)
-                        $body .= ' WHERE `tag` ' . $operator . ' :tags' . $i;
-                    else
-                        $body .= ' OR `tag` ' . $operator . ' :tags' . $i;
+                $tags = explode(',', $tagFilter);
+                $this->tagFilter($tags, $operator, $body, $params);
+            }
+        }
 
-                    if ($operator === '=')
-                        $params['tags' . $i] = $tag;
-                    else
-                        $params['tags' . $i] = '%' . $tag . '%';
+        // run the special query to help sort by displays already assigned to this display group, we want to run it only if we're sorting by member column.
+        if ($this->getSanitizer()->getInt('displayGroupIdMembers', $filterBy) !== null && ($sortOrder == ['`member`'] || $sortOrder == ['`member` DESC'] )) {
+            $members = [];
+            foreach ($this->getStore()->select($select . $body, $params) as $row) {
+                $displayId = $this->getSanitizer()->int($row['displayId']);
+                $displayGroupId = $this->getSanitizer()->getInt('displayGroupIdMembers', $filterBy);
+
+                if ($this->getStore()->exists('SELECT display.display, display.displayId, displaygroup.displayGroupId
+                                                    FROM display
+                                                      INNER JOIN `lkdisplaydg` 
+                                                          ON lkdisplaydg.displayId = `display`.displayId 
+                                                          AND lkdisplaydg.displayGroupId = :displayGroupId 
+                                                          AND lkdisplaydg.displayId = :displayId
+                                                      INNER JOIN `displaygroup` 
+                                                          ON displaygroup.displaygroupid = lkdisplaydg.displaygroupid
+                                                          AND `displaygroup`.isDisplaySpecific = 0',
+                    [
+                        'displayGroupId' => $displayGroupId,
+                        'displayId' => $displayId
+                    ]
+                )) {
+                    $members[] = $displayId;
                 }
-
-                $body .= " ) ";
             }
         }
 
         // Sorting?
         $order = '';
-        if (is_array($sortOrder))
+
+        if (isset($members) && $members != [] ) {
+            $sqlOrderMembers = 'ORDER BY FIELD(display.displayId,' . implode(',', $members) . ')';
+
+            foreach ($sortOrder as $sort) {
+                if ($sort == '`member`') {
+                    $order .= $sqlOrderMembers;
+                    continue;
+                }
+
+                if ($sort == '`member` DESC') {
+                    $order .= $sqlOrderMembers . ' DESC';
+                    continue;
+                }
+            }
+        }
+
+        if (is_array($sortOrder) && ($sortOrder != ['`member`'] && $sortOrder != ['`member` DESC'] )) {
             $order .= 'ORDER BY ' . implode(',', $sortOrder);
+        }
 
         $limit = '';
         // Paging
@@ -438,7 +501,7 @@ class DisplayFactory extends BaseFactory
         $sql = $select . $body . $order . $limit;
 
         foreach ($this->getStore()->select($sql, $params) as $row) {
-            $entries[] = $this->createEmpty()->hydrate($row, [
+            $display = $this->createEmpty()->hydrate($row, [
                 'intProperties' => [
                     'auditingUntil',
                     'wakeOnLanEnabled',
@@ -452,9 +515,12 @@ class DisplayFactory extends BaseFactory
                     'mediaInventoryStatus',
                     'clientCode',
                     'screenShotRequested',
-                    'lastCommandSuccess'
+                    'lastCommandSuccess',
+                    'bandwidthLimit'
                 ]
             ]);
+            $display->overrideConfig = ($display->overrideConfig == '') ? [] : json_decode($display->overrideConfig, true);
+            $entries[] = $display;
         }
 
         // Paging

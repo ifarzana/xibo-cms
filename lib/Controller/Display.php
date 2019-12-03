@@ -1,7 +1,8 @@
 <?php
-/*
+/**
+ * Copyright (C) 2019 Xibo Signage Ltd
+ *
  * Xibo - Digital Signage - http://www.xibo.org.uk
- * Copyright (C) 2006-2018 Spring Signage Ltd
  *
  * This file is part of Xibo.
  *
@@ -20,13 +21,19 @@
  */
 namespace Xibo\Controller;
 
+use GuzzleHttp\Client;
 use Intervention\Image\ImageManagerStatic as Img;
+use Jenssegers\Date\Date;
+use Respect\Validation\Validator as v;
+use RobThree\Auth\TwoFactorAuth;
 use Stash\Interfaces\PoolInterface;
 use Xibo\Entity\RequiredFile;
 use Xibo\Exception\AccessDeniedException;
 use Xibo\Exception\ConfigurationException;
+use Xibo\Exception\InvalidArgumentException;
 use Xibo\Exception\NotFoundException;
 use Xibo\Exception\XiboException;
+use Xibo\Factory\DayPartFactory;
 use Xibo\Factory\DisplayEventFactory;
 use Xibo\Factory\DisplayFactory;
 use Xibo\Factory\DisplayGroupFactory;
@@ -35,11 +42,13 @@ use Xibo\Factory\LayoutFactory;
 use Xibo\Factory\LogFactory;
 use Xibo\Factory\MediaFactory;
 use Xibo\Factory\NotificationFactory;
+use Xibo\Factory\PlayerVersionFactory;
 use Xibo\Factory\RequiredFileFactory;
 use Xibo\Factory\ScheduleFactory;
 use Xibo\Factory\TagFactory;
 use Xibo\Factory\UserGroupFactory;
 use Xibo\Helper\ByteFormatter;
+use Xibo\Helper\HttpsDetect;
 use Xibo\Helper\Random;
 use Xibo\Helper\WakeOnLan;
 use Xibo\Service\ConfigServiceInterface;
@@ -57,6 +66,8 @@ use Xibo\XMR\ScreenShotAction;
  */
 class Display extends Base
 {
+    use DisplayProfileConfigFields;
+
     /**
      * @var StorageServiceInterface
      */
@@ -71,6 +82,11 @@ class Display extends Base
      * @var PlayerActionServiceInterface
      */
     private $playerAction;
+
+    /**
+     * @var DayPartFactory
+     */
+    private $dayPartFactory;
 
     /**
      * @var DisplayFactory
@@ -110,6 +126,9 @@ class Display extends Base
     /** @var  DisplayEventFactory */
     private $displayEventFactory;
 
+    /** @var PlayerVersionFactory */
+    private $playerVersionFactory;
+
     /** @var  RequiredFileFactory */
     private $requiredFileFactory;
 
@@ -146,8 +165,10 @@ class Display extends Base
      * @param TagFactory $tagFactory
      * @param NotificationFactory $notificationFactory
      * @param UserGroupFactory $userGroupFactory
+     * @param PlayerVersionFactory $playerVersionFactory
+     * @param DayPartFactory $dayPartFactory
      */
-    public function __construct($log, $sanitizerService, $state, $user, $help, $date, $config, $store, $pool, $playerAction, $displayFactory, $displayGroupFactory, $logFactory, $layoutFactory, $displayProfileFactory, $mediaFactory, $scheduleFactory, $displayEventFactory, $requiredFileFactory, $tagFactory, $notificationFactory, $userGroupFactory)
+    public function __construct($log, $sanitizerService, $state, $user, $help, $date, $config, $store, $pool, $playerAction, $displayFactory, $displayGroupFactory, $logFactory, $layoutFactory, $displayProfileFactory, $mediaFactory, $scheduleFactory, $displayEventFactory, $requiredFileFactory, $tagFactory, $notificationFactory, $userGroupFactory, $playerVersionFactory, $dayPartFactory)
     {
         $this->setCommonDependencies($log, $sanitizerService, $state, $user, $help, $date, $config);
 
@@ -166,6 +187,8 @@ class Display extends Base
         $this->tagFactory = $tagFactory;
         $this->notificationFactory = $notificationFactory;
         $this->userGroupFactory = $userGroupFactory;
+        $this->playerVersionFactory = $playerVersionFactory;
+        $this->dayPartFactory = $dayPartFactory;
     }
 
     /**
@@ -394,6 +417,20 @@ class Display extends Base
      *      required=false
      *   ),
      *  @SWG\Parameter(
+     *      name="clientType",
+     *      in="formData",
+     *      description="Filter by Client Type",
+     *      type="string",
+     *      required=false
+     *   ),
+     *  @SWG\Parameter(
+     *      name="clientCode",
+     *      in="formData",
+     *      description="Filter by Client Code",
+     *      type="string",
+     *      required=false
+     *   ),
+     *  @SWG\Parameter(
      *      name="embed",
      *      in="formData",
      *      description="Embed related data, namely displaygroups. A comma separated list of child objects to embed.",
@@ -414,6 +451,27 @@ class Display extends Base
      *      type="integer",
      *      required=false
      *   ),
+     *  *  @SWG\Parameter(
+     *      name="mediaInventoryStatus",
+     *      in="formData",
+     *      description="Filter by Display Status ( 1 - up to date, 2 - downloading, 3 - Out of date)",
+     *      type="integer",
+     *      required=false
+     *   ),
+     *  *  @SWG\Parameter(
+     *      name="loggedIn",
+     *      in="formData",
+     *      description="Filter by Logged In flag",
+     *      type="integer",
+     *      required=false
+     *   ),
+     *  *  @SWG\Parameter(
+     *      name="lastAccessed",
+     *      in="formData",
+     *      description="Filter by Display Last Accessed date, expects date in Y-m-d H:i:s format",
+     *      type="string",
+     *      required=false
+     *   ),
      *  @SWG\Response(
      *      response=200,
      *      description="successful operation",
@@ -423,6 +481,8 @@ class Display extends Base
      *      )
      *  )
      * )
+     *
+     * @throws \Xibo\Exception\XiboException
      */
     function grid()
     {
@@ -436,12 +496,18 @@ class Display extends Base
             'license' => $this->getSanitizer()->getString('hardwareKey'),
             'displayGroupId' => $this->getSanitizer()->getInt('displayGroupId'),
             'clientVersion' => $this->getSanitizer()->getString('clientVersion'),
+            'clientType' => $this->getSanitizer()->getString('clientType'),
+            'clientCode' => $this->getSanitizer()->getString('clientCode'),
             'authorised' => $this->getSanitizer()->getInt('authorised'),
             'displayProfileId' => $this->getSanitizer()->getInt('displayProfileId'),
             'tags' => $this->getSanitizer()->getString('tags'),
             'exactTags' => $this->getSanitizer()->getCheckbox('exactTags'),
             'showTags' => true,
-            'clientAddress' => $this->getSanitizer()->getString('clientAddress')
+            'clientAddress' => $this->getSanitizer()->getString('clientAddress'),
+            'mediaInventoryStatus' => $this->getSanitizer()->getInt('mediaInventoryStatus'),
+            'loggedIn' => $this->getSanitizer()->getInt('loggedIn'),
+            'lastAccessed' => ($this->getSanitizer()->getDate('lastAccessed') != null) ? $this->getSanitizer()->getDate('lastAccessed')->format('U') : null,
+            'displayGroupIdMembers' => $this->getSanitizer()->getInt('displayGroupIdMembers')
         ];
 
         // Get a list of displays
@@ -464,15 +530,35 @@ class Display extends Base
                 $display->excludeProperty('displayGroups');
             }
 
+            if (in_array('overrideconfig', $embed)) {
+                $display->includeProperty('overrideConfig');
+            }
+
+            $display->bandwidthLimitFormatted = ByteFormatter::format($display->bandwidthLimit * 1024);
+
             // Current layout from cache
             $display->setChildObjectDependencies($this->layoutFactory, $this->mediaFactory, $this->scheduleFactory);
             $display->getCurrentLayoutId($this->pool);
 
-            if ($this->isApi())
+            if ($this->isApi()) {
+                $display->lastAccessed = $this->getDate()->getLocalDate($display->lastAccessed);
+                $display->auditingUntil = ($display->auditingUntil == 0) ? 0 : $this->getDate()->getLocalDate($display->auditingUntil);
+                $display->storageAvailableSpace = ByteFormatter::format($display->storageAvailableSpace);
+                $display->storageTotalSpace = ByteFormatter::format($display->storageTotalSpace);
                 continue;
+            }
+
+            // use try and catch here to cover scenario when there is no default display profile set for any of the existing display types.
+            $displayProfileName = '';
+            try {
+                $defaultDisplayProfile = $this->displayProfileFactory->getDefaultByType($display->clientType);
+                $displayProfileName = $defaultDisplayProfile->name;
+            } catch (NotFoundException $e) {
+                $this->getLog()->debug('No default Display Profile set for Display type ' . $display->clientType);
+            }
 
             // Add in the display profile information
-            $display->displayProfile = (!array_key_exists($display->displayProfileId, $displayProfiles)) ? __('Default') : $displayProfiles[$display->displayProfileId];
+            $display->displayProfile = (!array_key_exists($display->displayProfileId, $displayProfiles)) ? $displayProfileName . __(' (Default)') : $displayProfiles[$display->displayProfileId];
 
             $display->includeProperty('buttons');
 
@@ -502,7 +588,7 @@ class Display extends Base
             // Thumbnail
             $display->thumbnail = '';
             // If we aren't logged in, and we are showThumbnail == 2, then show a circle
-            if (file_exists($this->getConfig()->GetSetting('LIBRARY_LOCATION') . 'screenshots/' . $display->displayId . '_screenshot.jpg')) {
+            if (file_exists($this->getConfig()->getSetting('LIBRARY_LOCATION') . 'screenshots/' . $display->displayId . '_screenshot.jpg')) {
                 $display->thumbnail = $this->urlFor('display.screenShot', ['id' => $display->displayId]) . '?' . Random::generateString();
             }
 
@@ -585,10 +671,10 @@ class Display extends Base
             }
 
             // Schedule Now
-            if ($this->getUser()->checkEditable($display) || $this->getConfig()->GetSetting('SCHEDULE_WITH_VIEW_PERMISSION') == 'Yes') {
+            if (($this->getUser()->checkEditable($display) || $this->getConfig()->getSetting('SCHEDULE_WITH_VIEW_PERMISSION') == 1) && $this->getUser()->routeViewable('/schedulenow/form/now/:from/:id') === true ) {
                 $display->buttons[] = array(
                     'id' => 'display_button_schedulenow',
-                    'url' => $this->urlFor('schedule.now.form', ['id' => $display->displayGroupId, 'from' => 'DisplayGroup']),
+                    'url' => $this->urlFor('schedulenow.now.form', ['id' => $display->displayGroupId, 'from' => 'DisplayGroup']),
                     'text' => __('Schedule Now')
                 );
             }
@@ -657,19 +743,13 @@ class Display extends Base
                     'url' => $this->urlFor('user.permissions.form', ['entity' => 'DisplayGroup', 'id' => $display->displayGroupId]),
                     'text' => __('Permissions')
                 );
-
-                // Version Information
-                $display->buttons[] = array(
-                    'id' => 'display_button_version_instructions',
-                    'url' => $this->urlFor('displayGroup.version.form', ['id' => $display->displayGroupId]),
-                    'text' => __('Version Information')
-                );
             }
 
             if ($this->getUser()->checkEditable($display)) {
 
-                if ($this->getUser()->checkPermissionsModifyable($display))
+                if ($this->getUser()->checkPermissionsModifyable($display)) {
                     $display->buttons[] = ['divider' => true];
+                }
 
                 // Wake On LAN
                 $display->buttons[] = array(
@@ -683,6 +763,23 @@ class Display extends Base
                     'url' => $this->urlFor('displayGroup.command.form', ['id' => $display->displayGroupId]),
                     'text' => __('Send Command')
                 );
+
+                $display->buttons[] = ['divider' => true];
+
+                $display->buttons[] = [
+                    'id' => 'display_button_move_cms',
+                    'url' => $this->urlFor('display.moveCms.form', ['id' => $display->displayId]),
+                    'text' => __('Transfer to another CMS'),
+                    'multi-select' => true,
+                    'dataAttributes' => [
+                        ['name' => 'commit-url', 'value' => $this->urlFor('display.moveCms', ['id' => $display->displayId])],
+                        ['name' => 'commit-method', 'value' => 'put'],
+                        ['name' => 'id', 'value' => 'display_button_move_cms'],
+                        ['name' => 'text', 'value' => __('Transfer to another CMS')],
+                        ['name' => 'rowtitle', 'value' => $display->display],
+                        ['name' => 'form-callback', 'value' => 'setMoveCmsMultiSelectFormOpen']
+                    ]
+                ];
             }
         }
 
@@ -694,6 +791,7 @@ class Display extends Base
     /**
      * Edit Display Form
      * @param int $displayId
+     * @throws \Xibo\Exception\XiboException
      */
     function editForm($displayId)
     {
@@ -702,44 +800,28 @@ class Display extends Base
         if (!$this->getUser()->checkEditable($display))
             throw new AccessDeniedException();
 
-        // Time format for display
-        $timeFormat = $this->getDate()->extractTimeFormat($this->getConfig()->GetSetting('DATE_FORMAT'));
+        // We have permission - load
+        $display->load();
+
+        $tags = '';
+
+        $arrayOfTags = array_filter(explode(',', $display->tags));
+        $arrayOfTagValues = array_filter(explode(',', $display->tagValues));
+
+        for ($i=0; $i<count($arrayOfTags); $i++) {
+            if (isset($arrayOfTags[$i]) && (isset($arrayOfTagValues[$i]) && $arrayOfTagValues[$i] !== 'NULL' )) {
+                $tags .= $arrayOfTags[$i] . '|' . $arrayOfTagValues[$i];
+                $tags .= ',';
+            } else {
+                $tags .= $arrayOfTags[$i] . ',';
+            }
+        }
 
         // Dates
         $display->auditingUntilIso = $this->getDate()->getLocalDate($display->auditingUntil);
 
         // Get the settings from the profile
         $profile = $display->getSettings();
-
-        // Go through each one, and see if it is a drop down
-        for ($i = 0; $i < count($profile); $i++) {
-            // Always update the value string with the source value
-            $profile[$i]['valueString'] = $profile[$i]['value'];
-
-            // Overwrite the value string when we are dealing with dropdowns
-            if ($profile[$i]['fieldType'] == 'dropdown') {
-                // Update our value
-                foreach ($profile[$i]['options'] as $option) {
-                    if ($option['id'] == $profile[$i]['value'])
-                        $profile[$i]['valueString'] = $option['value'];
-                }
-            } else if ($profile[$i]['fieldType'] == 'timePicker') {
-                // Determine the value and its format
-                if ($profile[$i]['value'] == null || $profile[$i]['value'] == '0') {
-                    // Empty (new profile)
-                    $profile[$i]['valueString'] = $this->getDate()->parse('00:00', 'H:i')->format($timeFormat);
-                } else {
-                    // A format has been set
-                    $format = (strlen($profile[$i]['value']) == 5) ? 'H:i' : 'H:i:s';
-                    try {
-                        $profile[$i]['valueString'] = $this->getDate()->parse($profile[$i]['value'], $format)->format($timeFormat);
-                    } catch (\InvalidArgumentException $invalidArgumentException) {
-                        $this->getLog()->error('Display Profile contains an invalid time format, expecting ' . $format . ' value is ' . $profile[$i]['value']);
-                        $profile[$i]['valueString'] = '00:00';
-                    }
-                }
-            }
-        }
 
         // Get a list of timezones
         $timeZones = [];
@@ -754,15 +836,63 @@ class Display extends Base
             $layouts = [];
         }
 
+        // Player Version Setting
+        $versionId = $display->getSetting('versionMediaId', null, ['displayOnly' => true]);
+        $profileVersionId = $display->getDisplayProfile()->getSetting('versionMediaId');
+        $playerVersions = [];
+
+        // Daypart - Operating Hours
+        $dayPartId = $display->getSetting('dayPartId', null,['displayOnly' => true]);
+        $profileDayPartId = $display->getDisplayProfile()->getSetting('dayPartId');
+        $dayparts = [];
+
+        // Get the Player Version for this display profile type
+        if ($versionId !== null) {
+            try {
+                $playerVersions[] = $this->playerVersionFactory->getByMediaId($versionId);
+            } catch (NotFoundException $e) {
+                $this->getLog()->debug('Unknown versionId set on Display Profile for displayId ' . $display->displayId);
+            }
+        }
+
+        if ($versionId !== $profileVersionId) {
+            try {
+                $playerVersions[] = $this->playerVersionFactory->getByMediaId($profileVersionId);
+            } catch (NotFoundException $e) {
+                $this->getLog()->debug('Unknown versionId set on Display Profile for displayId ' . $display->displayId);
+            }
+        }
+
+        if ($dayPartId !== null) {
+            try {
+                $dayparts[] = $this->dayPartFactory->getById($dayPartId);
+            } catch (NotFoundException $e) {
+                $this->getLog()->debug('Unknown dayPartId set on Display Profile for displayId ' . $display->displayId);
+            }
+        }
+
+        if ($dayPartId !== $profileDayPartId) {
+            try {
+                $dayparts[] = $this->dayPartFactory->getById($profileDayPartId);
+            } catch (NotFoundException $e) {
+                $this->getLog()->debug('Unknown dayPartId set on Display Profile for displayId ' . $display->displayId);
+            }
+        }
+
         $this->getState()->template = 'display-form-edit';
         $this->getState()->setData([
             'display' => $display,
+            'displayProfile' => $display->getDisplayProfile(),
+            'lockOptions' => json_decode($display->getDisplayProfile()->getSetting('lockOptions', '[]'), true),
             'layouts' => $layouts,
             'profiles' => $this->displayProfileFactory->query(NULL, array('type' => $display->clientType)),
             'settings' => $profile,
             'timeZones' => $timeZones,
-            'displayLockName' => ($this->getConfig()->GetSetting('DISPLAY_LOCK_NAME_TO_DEVICENAME') == 1),
-            'help' => $this->getHelp()->link('Display', 'Edit')
+            'displayLockName' => ($this->getConfig()->getSetting('DISPLAY_LOCK_NAME_TO_DEVICENAME') == 1),
+            'help' => $this->getHelp()->link('Display', 'Edit'),
+            'versions' => $playerVersions,
+            'tags' => $tags,
+            'dayParts' => $dayparts
         ]);
     }
 
@@ -955,6 +1085,8 @@ class Display extends Base
      *      @SWG\Schema(ref="#/definitions/Display")
      *  )
      * )
+     *
+     * @throws \Xibo\Exception\XiboException
      */
     function edit($displayId)
     {
@@ -964,8 +1096,10 @@ class Display extends Base
             throw new AccessDeniedException();
 
         // Update properties
-        if ($this->getConfig()->GetSetting('DISPLAY_LOCK_NAME_TO_DEVICENAME') == 0)
+        if ($this->getConfig()->getSetting('DISPLAY_LOCK_NAME_TO_DEVICENAME') == 0)
             $display->display = $this->getSanitizer()->getString('display');
+
+        $display->load();
 
         $display->description = $this->getSanitizer()->getString('description');
         $display->auditingUntil = $this->getSanitizer()->getDate('auditingUntil');
@@ -984,6 +1118,12 @@ class Display extends Base
         $display->longitude = $this->getSanitizer()->getDouble('longitude');
         $display->timeZone = $this->getSanitizer()->getString('timeZone');
         $display->displayProfileId = $this->getSanitizer()->getInt('displayProfileId');
+        $display->bandwidthLimit = $this->getSanitizer()->getInt('bandwidthLimit');
+
+
+        // Get the display profile and use that to pull in any overrides
+        // start with an empty config
+        $display->overrideConfig = $this->editConfigFields($display->getDisplayProfile(), []);
 
         // Tags are stored on the displaygroup, we're just passing through here
         $display->tags = $this->tagFactory->tagsFromString($this->getSanitizer()->getString('tags'));
@@ -1011,6 +1151,11 @@ class Display extends Base
 
         $display->setChildObjectDependencies($this->layoutFactory, $this->mediaFactory, $this->scheduleFactory);
         $display->save();
+
+        if ($this->isApi()) {
+            $display->lastAccessed = $this->getDate()->getLocalDate($display->lastAccessed);
+            $display->auditingUntil = ($display->auditingUntil == 0) ? 0 : $this->getDate()->getLocalDate($display->auditingUntil);
+        }
 
         // Return
         $this->getState()->hydrate([
@@ -1175,7 +1320,7 @@ class Display extends Base
         $file = 'screenshots/' . $displayId . '_screenshot.jpg';
 
         // File upload directory.. get this from the settings object
-        $library = $this->getConfig()->GetSetting("LIBRARY_LOCATION");
+        $library = $this->getConfig()->getSetting("LIBRARY_LOCATION");
         $fileName = $library . $file;
 
         if (!file_exists($fileName)) {
@@ -1201,10 +1346,11 @@ class Display extends Base
         header("Expires: 0");
 
         // Disable any buffering to prevent OOM errors.
-        @ob_end_clean();
-        @ob_end_flush();
+        while (ob_get_level() > 0) {
+            ob_end_clean();
+        }
 
-        echo $img->response();
+        echo $img->encode();
     }
 
     /**
@@ -1356,9 +1502,9 @@ class Display extends Base
     public function validateDisplays($displays)
     {
         // Get the global time out (overrides the alert time out on the display if 0)
-        $globalTimeout = $this->getConfig()->GetSetting('MAINTENANCE_ALERT_TOUT') * 60;
-        $emailAlerts = ($this->getConfig()->GetSetting("MAINTENANCE_EMAIL_ALERTS") == 'On');
-        $alwaysAlert = ($this->getConfig()->GetSetting("MAINTENANCE_ALWAYS_ALERT") == 'On');
+        $globalTimeout = $this->getConfig()->getSetting('MAINTENANCE_ALERT_TOUT') * 60;
+        $emailAlerts = ($this->getConfig()->getSetting("MAINTENANCE_EMAIL_ALERTS") == 1);
+        $alwaysAlert = ($this->getConfig()->getSetting("MAINTENANCE_ALWAYS_ALERT") == 1);
 
         foreach ($displays as $display) {
             /* @var \Xibo\Entity\Display $display */
@@ -1387,11 +1533,6 @@ class Display extends Base
                     $display->loggedIn = 0;
                     $display->save(\Xibo\Entity\Display::$saveOptionsMinimum);
 
-                    // We put it back again (in memory only)
-                    // this is then used to indicate whether or not this is the first time this display has gone
-                    // offline (for anything that uses the timedOutDisplays return
-                    $display->loggedIn = 1;
-
                     // Log the down event
                     $event = $this->displayEventFactory->createEmpty();
                     $event->displayId = $display->displayId;
@@ -1399,23 +1540,73 @@ class Display extends Base
                     $event->save();
                 }
 
+                $dayPartId = $display->getSetting('dayPartId', null,['displayOverride' => true]);
+                $operatingHours = true;
+
+                if ($dayPartId !== null) {
+                    try {
+                        $dayPart = $this->dayPartFactory->getById($dayPartId);
+
+                        $startTimeArray = explode(':', $dayPart->startTime);
+                        $startTime = Date::now()->setTime(intval($startTimeArray[0]), intval($startTimeArray[1]));
+
+                        $endTimeArray = explode(':', $dayPart->endTime);
+                        $endTime = Date::now()->setTime(intval($endTimeArray[0]), intval($endTimeArray[1]));
+
+                        $now = Date::now();
+
+                        // exceptions
+                        foreach ($dayPart->exceptions as $exception) {
+
+                            // check if we are on exception day and if so override the start and endtime accordingly
+                            if ($exception['day'] == Date::now()->format('D')) {
+
+                                $exceptionsStartTime = explode(':', $exception['start']);
+                                $startTime = Date::now()->setTime(intval($exceptionsStartTime[0]), intval($exceptionsStartTime[1]));
+
+                                $exceptionsEndTime = explode(':', $exception['end']);
+                                $endTime = Date::now()->setTime(intval($exceptionsEndTime[0]), intval($exceptionsEndTime[1]));
+                            }
+                        }
+
+                        // check if we are inside the operating hours for this display - we use that flag to decide if we need to create a notification and send an email.
+                        if (($now >= $startTime && $now <= $endTime)) {
+                            $operatingHours = true;
+                        } else {
+                            $operatingHours = false;
+                        }
+
+                    } catch (NotFoundException $e) {
+                        $this->getLog()->debug('Unknown dayPartId set on Display Profile for displayId ' . $display->displayId);
+                    }
+                }
+
                 // Should we create a notification
                 if ($emailAlerts && $display->emailAlert == 1 && ($displayOffline || $alwaysAlert)) {
                     // Alerts enabled for this display
                     // Display just gone offline, or always alert
                     // Fields for email
-                    $subject = sprintf(__("Email Alert for Display %s"), $display->display);
-                    $body = sprintf(__("Display %s with ID %d was last seen at %s."), $display->display, $display->displayId, $this->getDate()->getLocalDate($display->lastAccessed));
 
-                    // Add to system
-                    $notification = $this->notificationFactory->createSystemNotification($subject, $body, $this->getDate()->parse());
+                    // for displays without dayPartId set, this is always true, otherwise we check if we are inside the operating hours set for this display
+                    if ($operatingHours) {
+                        $subject = sprintf(__("Alert for Display %s"), $display->display);
+                        $body = sprintf(__("Display ID %d is offline since %s."), $display->displayId,
+                            $this->getDate()->getLocalDate($display->lastAccessed));
 
-                    // Add in any displayNotificationGroups, with permissions
-                    foreach ($this->userGroupFactory->getDisplayNotificationGroups($display->displayGroupId) as $group) {
-                        $notification->assignUserGroup($group);
+                        // Add to system
+                        $notification = $this->notificationFactory->createSystemNotification($subject, $body,
+                            $this->getDate()->parse());
+
+                        // Add in any displayNotificationGroups, with permissions
+                        foreach ($this->userGroupFactory->getDisplayNotificationGroups($display->displayGroupId) as $group) {
+                            $notification->assignUserGroup($group);
+                        }
+
+                        $notification->save();
+                    } else {
+                        $this->getLog()->info('Not sending email down alert for Display - ' . $display->display . ' we are outside of its operating hours');
                     }
 
-                    $notification->save();
                 } else if ($displayOffline) {
                     $this->getLog()->info('Not sending an email for offline display - emailAlert = ' . $display->emailAlert . ', alwaysAlert = ' . $alwaysAlert);
                 }
@@ -1562,5 +1753,134 @@ class Display extends Base
             'message' => sprintf(__('Default Layout with name %s set for %s'), $layout->layout, $display->display),
             'id' => $display->displayId
         ]);
+    }
+
+    /**
+     * @param $displayId
+     * @throws NotFoundException
+     */
+    public function moveCmsForm($displayId)
+    {
+        if ($this->getUser()->twoFactorTypeId != 2) {
+            throw new AccessDeniedException('This action requires active Google Authenticator Two Factor authentication');
+        }
+
+        $display = $this->displayFactory->getById($displayId);
+
+        if (!$this->getUser()->checkEditable($display)) {
+            throw new AccessDeniedException();
+        }
+
+        $this->getState()->template = 'display-form-moveCms';
+        $this->getState()->setData([
+            'display' => $display,
+            'newCmsAddress' => $display->newCmsAddress,
+            'newCmsKey' => $display->newCmsKey
+        ]);
+
+    }
+
+    /**
+     * @param $displayId
+     * @throws NotFoundException
+     * @throws \RobThree\Auth\TwoFactorAuthException
+     * @throws InvalidArgumentException
+     * @throws XiboException
+     */
+    public function moveCms($displayId)
+    {
+        if ($this->getUser()->twoFactorTypeId != 2) {
+            throw new AccessDeniedException('This action requires active Google Authenticator Two Factor authentication');
+        }
+
+        $display = $this->displayFactory->getById($displayId);
+
+        if (!$this->getUser()->checkEditable($display)) {
+            throw new AccessDeniedException();
+        }
+
+        // Two Factor Auth
+        $issuerSettings = $this->getConfig()->getSetting('TWOFACTOR_ISSUER');
+        $appName = $this->getConfig()->getThemeConfig('app_name');
+
+        if ($issuerSettings !== '') {
+            $issuer = $issuerSettings;
+        } else {
+            $issuer = $appName;
+        }
+
+        $authenticationCode = $this->getSanitizer()->getString('twoFactorCode', '');
+
+        $tfa = new TwoFactorAuth($issuer);
+        $result = $tfa->verifyCode($this->getUser()->twoFactorSecret, $authenticationCode);
+
+        if ($result) {
+
+            // get the new CMS Address and Key from the form.
+            $newCmsAddress = $this->getSanitizer()->getString('newCmsAddress');
+            $newCmsKey = $this->getSanitizer()->getString('newCmsKey');
+
+            // validate the URL
+            if (!v::url()->notEmpty()->validate(urldecode($newCmsAddress)) || !filter_var($newCmsAddress, FILTER_VALIDATE_URL)) {
+                throw new InvalidArgumentException(__('Provided CMS URL is invalid'), 'newCmsUrl');
+            }
+
+            if ($newCmsKey == '') {
+                throw new InvalidArgumentException(__('Provided CMS Key is invalid'), 'newCmsKey');
+            }
+
+            // we are successfully authenticated, get new CMS address and Key and save the Display record.
+            $display->newCmsAddress = $newCmsAddress;
+            $display->newCmsKey = $newCmsKey;
+            $display->save();
+
+        } else {
+            throw new InvalidArgumentException(__('Invalid Two Factor Authentication Code'), 'twoFactorCode');
+        }
+    }
+
+    public function addViaCodeForm()
+    {
+        $this->getState()->template = 'display-form-addViaCode';
+    }
+
+    /**
+     * @throws InvalidArgumentException
+     * @throws \GuzzleHttp\Exception\GuzzleException
+     */
+    public function addViaCode()
+    {
+        $user_code = $this->getSanitizer()->getString('user_code');
+        $cmsAddress = (new HttpsDetect())->getUrl();
+        $cmsKey = $this->getConfig()->getSetting('SERVER_KEY');
+
+        if ($user_code == '') {
+            throw new InvalidArgumentException('Code cannot be empty', 'code');
+        }
+
+        $guzzle = new Client();
+
+        try {
+            // When the valid code is submitted, it will be sent along with CMS Address and Key to Authentication Service maintained by Xibo Signage Ltd.
+            // The Player will then call the service with the same code to retrieve the CMS details.
+            // On success, the details will be removed from the Authentication Service.
+            $request = $guzzle->request('POST', 'https://auth.signlicence.co.uk/addDetails',
+                $this->getConfig()->getGuzzleProxy([
+                    'form_params' => [
+                        'user_code' => $user_code,
+                        'cmsAddress' => $cmsAddress,
+                        'cmsKey' => $cmsKey,
+                    ]
+                ]));
+
+            $data = json_decode($request->getBody(), true);
+
+            $this->getState()->hydrate([
+                'message' => $data['message']
+            ]);
+        } catch (\Exception $e) {
+            $this->getLog()->debug($e->getMessage());
+            throw new InvalidArgumentException('Provided user_code does not exist', 'user_code');
+        }
     }
 }

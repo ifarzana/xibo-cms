@@ -39,37 +39,41 @@ interface ConfigServiceInterface
      */
     public function getDatabaseConfig();
 
-    /** @return array */
+    /**
+     * Get settings
+     * @return array|mixed|null
+     */
     public function getSettings();
 
     /**
      * Gets the requested setting from the DB object given
      * @param $setting string
      * @param string[optional] $default
+     * @param bool[optional] $full
      * @return string
      */
-    public function GetSetting($setting, $default = NULL);
+    public function getSetting($setting, $default = NULL, $full = false);
 
     /**
      * Change Setting
      * @param string $setting
      * @param mixed $value
      */
-    public function ChangeSetting($setting, $value);
+    public function changeSetting($setting, $value);
 
     /**
-     * Defines the Version and returns it
-     * @param $object string[optional]
-     * @return array|string
-     * @throws \Exception
-     */
-    public function Version($object = '');
-
-    /**
-     * Is an upgrade pending?
+     * Is the provided setting visible
+     * @param string $setting
      * @return bool
      */
-    public function isUpgradePending();
+    public function isSettingVisible($setting);
+
+    /**
+     * Is the provided setting editable
+     * @param string $setting
+     * @return bool
+     */
+    public function isSettingEditable($setting);
 
     /**
      * Should the host be considered a proxy exception
@@ -89,7 +93,7 @@ interface ConfigServiceInterface
      * Checks the Environment and Determines if it is suitable
      * @return string
      */
-    public function CheckEnvironment();
+    public function checkEnvironment();
 
     /**
      * Loads the theme
@@ -119,6 +123,13 @@ interface ConfigServiceInterface
      * @param string $uri
      * @return bool
      */
+    public function themeFileExists($uri);
+
+    /**
+     * Check a web file exists
+     * @param string $uri
+     * @return bool
+     */
     public function fileExists($uri);
 
     /**
@@ -132,6 +143,12 @@ interface ConfigServiceInterface
      * @return array
      */
     public function getCacheDrivers();
+
+    /**
+     * Get time series store settings
+     * @return array
+     */
+    public function getTimeSeriesStore();
 
     /**
      * Get the cache namespace

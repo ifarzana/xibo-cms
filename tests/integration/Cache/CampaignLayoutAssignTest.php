@@ -50,11 +50,14 @@ class CampaignLayoutAssignTest extends LocalWebTestCase
         // Create a Layout
         $this->layout = $this->createLayout();
 
-        $response = $this->getEntityProvider()->post('/playlist/widget/text/' . $this->layout->regions[0]->playlists[0]['playlistId'], [
-            'text' => 'Widget A',
-            'duration' => 100,
-            'useDuration' => 1
-        ]);
+        // Checkout
+        $layout = $this->getDraft($this->layout);
+
+        // Add a simple widget
+        $this->addSimpleWidget($layout);
+
+        // Check us in again
+        $this->layout = $this->publish($this->layout);
 
         // Build the layout
         $this->buildLayout($this->layout);
@@ -79,6 +82,7 @@ class CampaignLayoutAssignTest extends LocalWebTestCase
             NULL,
             NULL,
             NULL,
+            0,
             0,
             0
         );

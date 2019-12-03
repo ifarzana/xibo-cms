@@ -3,7 +3,7 @@
 
 {% block pageContent %}
     <div class="widget">
-        <div class="widget-title">{% trans "All Layouts and Media" %}</div>
+        <div class="widget-title">{% trans "All Editable Widgets" %}</div>
         <div class="widget-body">
             <div class="XiboGrid" id="{{ random() }}" data-grid-name="mediaManagerView">
                 <div class="XiboFilter well">
@@ -11,16 +11,26 @@
                         <form class="form-inline">
 
                             {% set title %}{% trans "Layout" %}{% endset %}
-                            {{ inline.input("layout", title) }}
+                            {{ inline.input("layout", title, "", "", 'layout-draft') }}
 
                             {% set title %}{% trans "Region" %}{% endset %}
-                            {{ inline.input("region", title) }}
+                            {{ inline.input("region", title, "", "", "layout-draft") }}
+
+                            {% set title %}{% trans "Playlist" %}{% endset %}
+                            {{ inline.input("playlist", title, "", "", "playlist") }}
 
                             {% set title %}{% trans "Media" %}{% endset %}
                             {{ inline.input("media", title) }}
 
                             {% set title %}{% trans "Module" %}{% endset %}
                             {{ inline.dropdown("type", "single", title, "", [{type:null, name:""}]|merge(modules), "type", "name") }}
+
+                            {% set title = "Widgets From"|trans %}
+                            {% set options = [
+                                { id: 1, value: "Drafts"|trans },
+                                { id: 2, value: "Playlists"|trans }
+                            ] %}
+                            {{ inline.dropdown("showWidgetsFrom", "single", title, "", options, "id", "value", helpText) }}
 
                         </form>
                     </div>
@@ -36,7 +46,7 @@
                                 <th>{% trans "Region" %}</th>
                                 <th>{% trans "Playlist" %}</th>
                                 <th>{% trans "Display Order" %}</th>
-                                <th></th>
+                                <th>{% trans "Row Menu" %}</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -50,10 +60,36 @@
 {% endblock %}
 
 {% block javaScript %}
+    {# Add common file #}
+    {% include "common.twig" %}
+
     <script type="text/javascript">
         var table;
 
         $(document).ready(function() {
+
+            if ($('#showWidgetsFrom').val() == 1) {
+                $('.playlist').hide();
+                $('#playlist').val("");
+                $('.layout-draft').show()
+            } else {
+                $('.layout-draft').hide();
+                $('#layout,#region').val("");
+                $('.playlist').show()
+            }
+
+            $('#showWidgetsFrom').change(function() {
+                if ($('#showWidgetsFrom').val() == 1) {
+                    $('.playlist').hide();
+                    $('#playlist').val("");
+                    $('.layout-draft').show()
+                } else {
+                    $('.layout-draft').hide();
+                    $('#layout,#region').val("");
+                    $('.playlist').show()
+                }
+            });
+
             table = $("#entries").DataTable({
                 "language": dataTablesLanguage,
                 serverSide: true,
@@ -61,7 +97,7 @@
                 searchDelay: 3000,
                 "order": [[1, "asc"]],
                 ajax: {
-                    url: "{{ urlFor("mediaManager.search") }}",
+                    url: "{{ urlFor("mediamanager.search") }}",
                     "data": function (d) {
                         $.extend(d, $("#entries").closest(".XiboGrid").find(".FilterDiv form").serializeObject());
                     }
@@ -109,12 +145,13 @@
                     openUploadForm({
                         oldMediaId: mediaId,
                         widgetId: widgetId,
-                        updateInAllChecked: {% if settings.LIBRARY_MEDIA_UPDATEINALL_CHECKB == "Checked" %}true{% else %}false{% endif %},
-                        deleteOldRevisionsChecked: {% if settings.LIBRARY_MEDIA_DELETEOLDVER_CHECKB == "Checked" %}true{% else %}false{% endif %},
+                        updateInAllChecked: {% if settings.LIBRARY_MEDIA_UPDATEINALL_CHECKB == 1 %}true{% else %}false{% endif %},
+                        deleteOldRevisionsChecked: {% if settings.LIBRARY_MEDIA_DELETEOLDVER_CHECKB == 1 %}true{% else %}false{% endif %},
                         trans: {
                             addFiles: "{% trans "Add Replacement" %}",
                             startUpload: "{% trans "Start Replace" %}",
                             cancelUpload: "{% trans "Cancel Replace" %}",
+                            processing: "{% trans "Processing..." %}",
                             updateInLayouts: {
                                 title: "{% trans "Update this media in all layouts it is assigned to?" %}",
                                 helpText: "{% trans "Note: It will only be updated in layouts you have permission to edit." %}"
@@ -130,6 +167,13 @@
                             validExt: validExtensions
                         }
                     });
+                });
+
+                // Bind to any media replace buttons
+                $("#" + e.target.id).find('.WidgetEditForm').on('click', function() {
+                    e.preventDefault();
+
+                    formHelpers.widgetFormRender($(this), $(this).data());
                 });
             });
             table.on('processing.dt', dataTableProcessing);
@@ -168,7 +212,9 @@
                 // Initialize the jQuery File Upload widget:
                 form.fileupload({
                     url: url,
-                    disableImageResize: true
+                    disableImageResize: true,
+                    maxNumberOfFiles: 1,
+                    limitMultiFileUploads: 1
                 });
 
                 // Upload server status check for browsers with CORS support:
@@ -201,6 +247,32 @@
                     data.formData = inputs.serializeArray().concat(form.serializeArray());
 
                     inputs.filter("input").prop("disabled", true);
+
+                }).bind('fileuploadstart', function (e, data) {
+                    // Show progress data
+                    form.find('.fileupload-progress .progress-extended').show();
+                    form.find('.fileupload-progress .progress-end').hide();
+                }).bind('fileuploadprogressall', function(e, data) {
+                    // Hide progress data and show processing
+                    if(data.total > 0 && data.loaded == data.total) {
+                        form.find('.fileupload-progress .progress-extended').hide();
+                        form.find('.fileupload-progress .progress-end').show();
+                    }
+                }).bind('fileuploadadded fileuploadcompleted fileuploadfinished', function (e, data) {
+                    // Get uploaded and downloaded files and toggle Done button
+                    var filesToUploadCount = form.find('tr.template-upload').length;
+                    var $button = form.parents('.modal:first').find('button[data-bb-handler="main"]');
+
+                    if(filesToUploadCount == 0) {
+                        $button.removeAttr('disabled');
+                    } else {
+                        $button.attr('disabled', 'disabled');
+                    }
+                });
+
+                form.bind('fileuploaddone', function (e, data) {
+                    table.ajax.reload();
+                    XiboDialogClose();
                 });
             });
         }
@@ -228,8 +300,8 @@
                 openUploadForm({
                     oldMediaId: mediaId,
                     widgetId: widgetId,
-                    updateInAllChecked: {% if settings.LIBRARY_MEDIA_UPDATEINALL_CHECKB == "Checked" %}true{% else %}false{% endif %},
-                    deleteOldRevisionsChecked: {% if settings.LIBRARY_MEDIA_DELETEOLDVER_CHECKB == "Checked" %}true{% else %}false{% endif %},
+                    updateInAllChecked: {% if settings.LIBRARY_MEDIA_UPDATEINALL_CHECKB == 1 %}true{% else %}false{% endif %},
+                    deleteOldRevisionsChecked: {% if settings.LIBRARY_MEDIA_DELETEOLDVER_CHECKB == 1 %}true{% else %}false{% endif %},
                     trans: {
                         addFiles: "{% trans "Add Replacement" %}",
                         startUpload: "{% trans "Start Replace" %}",
@@ -254,5 +326,11 @@
             footer.find(".btn-primary").before(replaceButton);
         }
     </script>
+
+    {% for module in assignableModules %}
+        {% if module.layoutDesignerJavaScript() != "" %}
+            {% include module.layoutDesignerJavaScript() ~ ".twig" %}
+        {% endif %}
+    {% endfor %}
 {% endblock %}
 

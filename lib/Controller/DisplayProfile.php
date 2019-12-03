@@ -1,7 +1,8 @@
 <?php
-/*
+/**
+ * Copyright (C) 2019 Xibo Signage Ltd
+ *
  * Xibo - Digital Signage - http://www.xibo.org.uk
- * Copyright (C) 2006-2014 Daniel Garner
  *
  * This file is part of Xibo.
  *
@@ -21,8 +22,11 @@
 namespace Xibo\Controller;
 use Stash\Interfaces\PoolInterface;
 use Xibo\Exception\AccessDeniedException;
+use Xibo\Exception\NotFoundException;
 use Xibo\Factory\CommandFactory;
+use Xibo\Factory\DayPartFactory;
 use Xibo\Factory\DisplayProfileFactory;
+use Xibo\Factory\PlayerVersionFactory;
 use Xibo\Service\ConfigServiceInterface;
 use Xibo\Service\DateServiceInterface;
 use Xibo\Service\LogServiceInterface;
@@ -34,8 +38,15 @@ use Xibo\Service\SanitizerServiceInterface;
  */
 class DisplayProfile extends Base
 {
+    use DisplayProfileConfigFields;
+
     /** @var  PoolInterface */
     private $pool;
+
+    /**
+     * @var DayPartFactory
+     */
+    private $dayPartFactory;
 
     /**
      * @var DisplayProfileFactory
@@ -46,6 +57,9 @@ class DisplayProfile extends Base
      * @var CommandFactory
      */
     private $commandFactory;
+
+    /** @var PlayerVersionFactory */
+    private $playerVersionFactory;
 
     /**
      * Set common dependencies.
@@ -59,14 +73,18 @@ class DisplayProfile extends Base
      * @param PoolInterface $pool
      * @param DisplayProfileFactory $displayProfileFactory
      * @param CommandFactory $commandFactory
+     * @param PlayerVersionFactory $playerVersionFactory
+     * @param DayPartFactory $dayPartFactory
      */
-    public function __construct($log, $sanitizerService, $state, $user, $help, $date, $config, $pool, $displayProfileFactory, $commandFactory)
+    public function __construct($log, $sanitizerService, $state, $user, $help, $date, $config, $pool, $displayProfileFactory, $commandFactory, $playerVersionFactory, $dayPartFactory)
     {
         $this->setCommonDependencies($log, $sanitizerService, $state, $user, $help, $date, $config);
 
         $this->pool = $pool;
         $this->displayProfileFactory = $displayProfileFactory;
         $this->commandFactory = $commandFactory;
+        $this->playerVersionFactory = $playerVersionFactory;
+        $this->dayPartFactory = $dayPartFactory;
     }
 
     /**
@@ -101,7 +119,14 @@ class DisplayProfile extends Base
      *  @SWG\Parameter(
      *      name="type",
      *      in="formData",
-     *      description="Filter by DisplayProfile Type (windows|android)",
+     *      description="Filter by DisplayProfile Type (windows|android|lg)",
+     *      type="string",
+     *      required=false
+     *   ),
+     *  @SWG\Parameter(
+     *      name="embed",
+     *      in="formData",
+     *      description="Embed related data such as config,commands,configWithDefault",
      *      type="string",
      *      required=false
      *   ),
@@ -114,6 +139,7 @@ class DisplayProfile extends Base
      *      )
      *  )
      * )
+     * @throws \Xibo\Exception\NotFoundException
      */
     function grid()
     {
@@ -123,17 +149,30 @@ class DisplayProfile extends Base
             'type' => $this->getSanitizer()->getString('type')
         ];
 
+        $embed = ($this->getSanitizer()->getString('embed') != null) ? explode(',', $this->getSanitizer()->getString('embed')) : [];
         $profiles = $this->displayProfileFactory->query($this->gridRenderSort(), $this->gridRenderFilter($filter));
+
+        if (count($profiles) <= 0)
+            throw new NotFoundException('Display Profile not found', 'DisplayProfile');
 
         foreach ($profiles as $profile) {
             /* @var \Xibo\Entity\DisplayProfile $profile */
 
             // Load the config
-            $profile->load();
+            $profile->load([
+                'loadConfig' => in_array('config', $embed),
+                'loadCommands' => in_array('commands', $embed),
+            ]);
+
+            if (in_array('configWithDefault', $embed)) {
+                $profile->includeProperty('configDefault');
+            }
+
+            if (!in_array('config', $embed)) {
+                $profile->excludeProperty('config');
+            }
 
             if ($this->isApi()) {
-                $profile->excludeProperty('configTabs');
-                $profile->excludeProperty('configDefault');
                 continue;
             }
 
@@ -144,6 +183,12 @@ class DisplayProfile extends Base
                 'id' => 'displayprofile_button_edit',
                 'url' => $this->urlFor('displayProfile.edit.form', ['id' => $profile->displayProfileId]),
                 'text' => __('Edit')
+            );
+
+            $profile->buttons[] = array(
+                'id' => 'displayprofile_button_copy',
+                'url' => $this->urlFor('displayProfile.copy.form', ['id' => $profile->displayProfileId]),
+                'text' => __('Copy')
             );
 
             if ($this->getUser()->checkDeleteable($profile)) {
@@ -218,6 +263,8 @@ class DisplayProfile extends Base
         $displayProfile->isDefault = $this->getSanitizer()->getCheckbox('isDefault');
         $displayProfile->userId = $this->getUser()->userId;
 
+        // We do not set any config at this point, so that unless the user chooses to edit the display profile
+        // our defaults in the Display Profile Entity take effect
         $displayProfile->save();
 
         // Return
@@ -232,14 +279,42 @@ class DisplayProfile extends Base
     /**
      * Edit Profile Form
      * @param int $displayProfileId
+     * @throws \Xibo\Exception\XiboException
      */
     public function editForm($displayProfileId)
     {
         // Create a form out of the config object.
         $displayProfile = $this->displayProfileFactory->getById($displayProfileId);
 
-        if ($this->getUser()->userTypeId != 1 && $this->getUser()->userId != $displayProfile->userId)
+        // Check permissions
+        if ($this->getUser()->userTypeId != 1 && $this->getUser()->userId != $displayProfile->userId) {
             throw new AccessDeniedException(__('You do not have permission to edit this profile'));
+        }
+
+        // Player Version Setting
+        $versionId = $displayProfile->getSetting('versionMediaId');
+        $playerVersions = [];
+
+        // Daypart - Operating Hours
+        $dayPartId = $displayProfile->getSetting('dayPartId');
+        $dayparts = [];
+
+        // Get the Player Version for this display profile type
+        if ($versionId !== null) {
+            try {
+                $playerVersions[] = $this->playerVersionFactory->getByMediaId($versionId);
+            } catch (NotFoundException $e) {
+                $this->getLog()->debug('Unknown versionId set on Display Profile. ' . $displayProfile->displayProfileId);
+            }
+        }
+
+        if ($dayPartId !== null) {
+            try {
+                $dayparts[] = $this->dayPartFactory->getById($dayPartId);
+            } catch (NotFoundException $e) {
+                $this->getLog()->debug('Unknown dayPartId set on Display Profile. ' . $displayProfile->displayProfileId);
+            }
+        }
 
         // Get a list of unassigned Commands
         $unassignedCommands = array_udiff($this->commandFactory->query(), $displayProfile->commands, function($a, $b) {
@@ -251,15 +326,17 @@ class DisplayProfile extends Base
         $this->getState()->template = 'displayprofile-form-edit';
         $this->getState()->setData([
             'displayProfile' => $displayProfile,
-            'tabs' => $displayProfile->configTabs,
-            'config' => $displayProfile->configDefault,
-            'commands' => array_merge($displayProfile->commands, $unassignedCommands)
+            'commands' => array_merge($displayProfile->commands, $unassignedCommands),
+            'versions' => $playerVersions,
+            'lockOptions' => json_decode($displayProfile->getSetting('lockOptions', '[]'), true),
+            'dayParts' => $dayparts
         ]);
     }
 
     /**
      * Edit
      * @param $displayProfileId
+     * @throws \Xibo\Exception\XiboException
      * 
      * @SWG\Put(
      *  path="/displayprofile/{displayProfileId}",
@@ -296,14 +373,8 @@ class DisplayProfile extends Base
      *      required=true
      *   ),
      *  @SWG\Response(
-     *      response=201,
-     *      description="successful operation",
-     *      @SWG\Schema(ref="#/definitions/DisplayProfile"),
-     *      @SWG\Header(
-     *          header="Location",
-     *          description="Location of the new record",
-     *          type="string"
-     *      )
+     *      response=204,
+     *      description="successful operation"
      *  )
      * )
      */
@@ -318,44 +389,8 @@ class DisplayProfile extends Base
         $displayProfile->name = $this->getSanitizer()->getString('name');
         $displayProfile->isDefault = $this->getSanitizer()->getCheckbox('isDefault');
 
-        // Capture and validate the posted form parameters in accordance with the display config object.
-        $combined = array();
-
-        foreach ($displayProfile->configDefault as $setting) {
-            // Validate the parameter
-            $value = null;
-
-            switch ($setting['type']) {
-                case 'string':
-                    $value = $this->getSanitizer()->getString($setting['name'], $setting['default']);
-                    break;
-
-                case 'int':
-                    $value = $this->getSanitizer()->getInt($setting['name'], $setting['default']);
-                    break;
-
-                case 'double':
-                    $value = $this->getSanitizer()->getDouble($setting['name'], $setting['default']);
-                    break;
-
-                case 'checkbox':
-                    $value = $this->getSanitizer()->getCheckbox($setting['name']);
-                    break;
-
-                default:
-                    $value = $this->getSanitizer()->getParam($setting['name'], $setting['default']);
-            }
-
-            // Add to the combined array
-            $combined[] = array(
-                'name' => $setting['name'],
-                'value' => $value,
-                'type' => $setting['type']
-            );
-        }
-
-        // Recursively merge the arrays and update
-        $displayProfile->config = $combined;
+        // Different fields for each client type
+        $this->editConfigFields($displayProfile);
 
         // Capture and update commands
         foreach ($this->commandFactory->query() as $command) {
@@ -363,7 +398,7 @@ class DisplayProfile extends Base
             if ($this->getSanitizer()->getString('commandString_' . $command->commandId) != null) {
                 // Set and assign the command
                 $command->commandString = $this->getSanitizer()->getString('commandString_' . $command->commandId);
-                $command->validationString = $this->getSanitizer()->getString('validationString_' . $command->commandId);
+                $command->validationString = $this->getSanitizer()->getString('validationString_' . $command->commandId, null);
                 $displayProfile->assignCommand($command);
             } else {
                 $displayProfile->unassignCommand($command);
@@ -407,6 +442,7 @@ class DisplayProfile extends Base
     /**
      * Delete Display Profile
      * @param int $displayProfileId
+     * @throws \Xibo\Exception\XiboException
      *
      * @SWG\Delete(
      *  path="/displayprofile/{displayProfileId}",
@@ -432,8 +468,9 @@ class DisplayProfile extends Base
         // Create a form out of the config object.
         $displayProfile = $this->displayProfileFactory->getById($displayProfileId);
 
-        if ($this->getUser()->userTypeId != 1 && $this->getUser()->userId != $displayProfile->userId)
-            throw new AccessDeniedException(__('You do not have permission to edit this profile'));
+        if ($this->getUser()->userTypeId != 1 && $this->getUser()->userId != $displayProfile->userId) {
+            throw new AccessDeniedException(__('You do not have permission to delete this profile'));
+        }
 
         $displayProfile->delete();
 
@@ -441,6 +478,82 @@ class DisplayProfile extends Base
         $this->getState()->hydrate([
             'httpStatus' => 204,
             'message' => sprintf(__('Deleted %s'), $displayProfile->name)
+        ]);
+    }
+
+    /**
+     * @param $displayProfileId
+     * @throws \Xibo\Exception\NotFoundException
+     */
+    public function copyForm($displayProfileId)
+    {
+        // Create a form out of the config object.
+        $displayProfile = $this->displayProfileFactory->getById($displayProfileId);
+
+        if ($this->getUser()->userTypeId != 1 && $this->getUser()->userId != $displayProfile->userId)
+            throw new AccessDeniedException(__('You do not have permission to delete this profile'));
+
+        $this->getState()->template = 'displayprofile-form-copy';
+        $this->getState()->setData([
+            'displayProfile' => $displayProfile
+        ]);
+    }
+
+    /**
+     * Copy Display Profile
+     * @param int $displayProfileId
+     * @throws \Xibo\Exception\XiboException
+     *
+     * @SWG\Post(
+     *  path="/displayprofile/{displayProfileId}/copy",
+     *  operationId="displayProfileCopy",
+     *  tags={"displayprofile"},
+     *  summary="Copy Display Profile",
+     *  description="Copy an existing Display Profile",
+     *  @SWG\Parameter(
+     *      name="displayProfileId",
+     *      in="path",
+     *      description="The Display Profile ID",
+     *      type="integer",
+     *      required=true
+     *   ),
+     *  @SWG\Parameter(
+     *      name="name",
+     *      in="path",
+     *      description="The name for the copy",
+     *      type="string",
+     *      required=true
+     *   ),
+     *  @SWG\Response(
+     *      response=201,
+     *      description="successful operation",
+     *      @SWG\Schema(ref="#/definitions/DisplayProfile"),
+     *      @SWG\Header(
+     *          header="Location",
+     *          description="Location of the new record",
+     *          type="string"
+     *      )
+     *  )
+     * )
+     */
+    public function copy($displayProfileId)
+    {
+        // Create a form out of the config object.
+        $displayProfile = $this->displayProfileFactory->getById($displayProfileId);
+
+        if ($this->getUser()->userTypeId != 1 && $this->getUser()->userId != $displayProfile->userId)
+            throw new AccessDeniedException(__('You do not have permission to delete this profile'));
+
+        $new = clone $displayProfile;
+        $new->name = $this->getSanitizer()->getString('name');
+        $new->save();
+
+        // Return
+        $this->getState()->hydrate([
+            'httpStatus' => 201,
+            'message' => sprintf(__('Added %s'), $new->name),
+            'id' => $new->displayProfileId,
+            'data' => $new
         ]);
     }
 }

@@ -33,6 +33,7 @@ use Xibo\Factory\LayoutFactory;
 use Xibo\Factory\MediaFactory;
 use Xibo\Factory\ModuleFactory;
 use Xibo\Factory\PermissionFactory;
+use Xibo\Factory\PlaylistFactory;
 use Xibo\Factory\RegionFactory;
 use Xibo\Factory\TagFactory;
 use Xibo\Service\ConfigServiceInterface;
@@ -73,6 +74,38 @@ class Layout implements \JsonSerializable
      * )
      */
     public $campaignId;
+
+    /**
+     * @var int
+     * @SWG\Property(
+     *  description="The parentId, if this Layout has a draft"
+     * )
+     */
+    public $parentId;
+
+    /**
+     * @var int
+     * @SWG\Property(
+     *  description="The Status Id"
+     * )
+     */
+    public $publishedStatusId = 1;
+
+    /**
+     * @var string
+     * @SWG\Property(
+     *  description="The Published Status (Published, Draft or Pending Approval"
+     * )
+     */
+    public $publishedStatus;
+
+    /**
+     * @var string
+     * @SWG\Property(
+     *  description="The Published Date"
+     * )
+     */
+    public $publishedDate;
 
     /**
      * @var int
@@ -192,6 +225,22 @@ class Layout implements \JsonSerializable
      */
     public $statusMessage;
 
+    /**
+     * @var int
+     * @SWG\Property(
+     *  description="Flag indicating whether the Layout stat is enabled"
+     * )
+     */
+    public $enableStat;
+
+    /**
+     * @var int
+     * @SWG\Property(
+     *  description="Flag indicating whether the default transitions should be applied to this Layout"
+     * )
+     */
+    public $autoApplyTransitions;
+
     // Child items
     /** @var Region[]  */
     public $regions = [];
@@ -203,6 +252,8 @@ class Layout implements \JsonSerializable
     // Read only properties
     public $owner;
     public $groupsWithPermissions;
+
+    public $tagValues;
 
     // Private
     private $unassignTags = [];
@@ -272,6 +323,9 @@ class Layout implements \JsonSerializable
      */
     private $moduleFactory;
 
+    /** @var PlaylistFactory */
+    private $playlistFactory;
+
     /**
      * Entity constructor.
      * @param StorageServiceInterface $store
@@ -287,7 +341,7 @@ class Layout implements \JsonSerializable
      * @param MediaFactory $mediaFactory
      * @param ModuleFactory $moduleFactory
      */
-    public function __construct($store, $log, $config, $date, $eventDispatcher, $permissionFactory, $regionFactory, $tagFactory, $campaignFactory, $layoutFactory, $mediaFactory, $moduleFactory)
+    public function __construct($store, $log, $config, $date, $eventDispatcher, $permissionFactory, $regionFactory, $tagFactory, $campaignFactory, $layoutFactory, $mediaFactory, $moduleFactory, $playlistFactory)
     {
         $this->setCommonDependencies($store, $log);
         $this->setPermissionsClass('Xibo\Entity\Campaign');
@@ -301,6 +355,7 @@ class Layout implements \JsonSerializable
         $this->layoutFactory = $layoutFactory;
         $this->mediaFactory = $mediaFactory;
         $this->moduleFactory = $moduleFactory;
+        $this->playlistFactory = $playlistFactory;
     }
 
     public function __clone()
@@ -311,6 +366,9 @@ class Layout implements \JsonSerializable
         $this->hash = null;
         $this->permissions = [];
 
+        // A normal clone (for copy) will set this to Published, so that the copy is published.
+        $this->publishedStatusId = 1;
+
         // Clone the regions
         $this->regions = array_map(function ($object) { return clone $object; }, $this->regions);
     }
@@ -320,7 +378,13 @@ class Layout implements \JsonSerializable
      */
     public function __toString()
     {
-        return sprintf('Layout %s - %d x %d. Regions = %d, Tags = %d. layoutId = %d. Status = %d, messages %d', $this->layout, $this->width, $this->height, count($this->regions), count($this->tags), $this->layoutId, $this->status, count($this->getStatusMessage()));
+        $countRegions = is_array($this->regions) ? count($this->regions) : 0;
+        $countTags = is_array($this->tags) ? count($this->tags) : 0;
+
+        $statusMessages = $this->getStatusMessage();
+        $countMessages = is_array($statusMessages) ? count($statusMessages) : 0;
+
+        return sprintf('Layout %s - %d x %d. Regions = %d, Tags = %d. layoutId = %d. Status = %d, messages %d', $this->layout, $this->width, $this->height, $countRegions, $countTags, $this->layoutId, $this->status, $countMessages);
     }
 
     /**
@@ -328,7 +392,7 @@ class Layout implements \JsonSerializable
      */
     private function hash()
     {
-        return md5($this->layoutId . $this->ownerId . $this->campaignId . $this->backgroundImageId . $this->backgroundColor . $this->width . $this->height . $this->status . $this->description . json_encode($this->statusMessage));
+        return md5($this->layoutId . $this->ownerId . $this->campaignId . $this->backgroundImageId . $this->backgroundColor . $this->width . $this->height . $this->status . $this->description . json_encode($this->statusMessage) . $this->publishedStatusId);
     }
 
     /**
@@ -394,20 +458,35 @@ class Layout implements \JsonSerializable
     /**
      * Get Widgets assigned to this Layout
      * @return Widget[]
+     * @throws NotFoundException
      */
     public function getWidgets()
     {
         $widgets = [];
 
         foreach ($this->regions as $region) {
-            /* @var Region $region */
-            foreach ($region->playlists as $playlist) {
-                /* @var Playlist $playlist */
-                $widgets = array_merge($playlist->widgets, $widgets);
-            }
+            $widgets = array_merge($region->getPlaylist()->widgets, $widgets);
         }
 
         return $widgets;
+    }
+
+    /**
+     * Is this Layout Editable - i.e. are we in a draft state or not.
+     * @return bool true if this layout is editable
+     */
+    public function isEditable()
+    {
+        return ($this->publishedStatusId === 2); // Draft
+    }
+
+    /**
+     * Is this Layout a Child?
+     * @return bool
+     */
+    public function isChild()
+    {
+        return ($this->parentId !== null);
     }
 
     /**
@@ -415,7 +494,7 @@ class Layout implements \JsonSerializable
      */
     public function getStatusMessage()
     {
-        if (empty($this->statusMessage))
+        if ($this->statusMessage === null || empty($this->statusMessage))
             return [];
 
         if (is_array($this->statusMessage))
@@ -448,6 +527,7 @@ class Layout implements \JsonSerializable
     /**
      * Load this Layout
      * @param array $options
+     * @throws XiboException
      */
     public function load($options = [])
     {
@@ -485,12 +565,13 @@ class Layout implements \JsonSerializable
         $this->hash = $this->hash();
         $this->loaded = true;
 
-        $this->getLog()->debug('Loaded %s', $this->layoutId);
+        $this->getLog()->debug('Loaded ' . $this->layoutId . ' with hash ' . $this->hash . ', status ' . $this->status);
     }
 
     /**
      * Load Playlists
      * @param array $options
+     * @throws XiboException
      */
     public function loadPlaylists($options = [])
     {
@@ -503,6 +584,7 @@ class Layout implements \JsonSerializable
     /**
      * Save this Layout
      * @param array $options
+     * @throws XiboException
      */
     public function save($options = [])
     {
@@ -529,17 +611,30 @@ class Layout implements \JsonSerializable
         if ($this->layoutId == null || $this->layoutId == 0) {
             $this->add();
 
-            if ($options['audit'])
-                $this->audit($this->layoutId, 'Added', ['layoutId' => $this->layoutId, 'layout' => $this->layout]);
+            if ($options['audit']) {
+                if ($this->parentId === null) {
+                    $this->audit($this->layoutId, 'Added', ['layoutId' => $this->layoutId, 'layout' => $this->layout, 'campaignId' => $this->campaignId]);
+                } else {
+                    $this->audit($this->layoutId, 'Checked out', ['layoutId' => $this->parentId, 'layout' => $this->layout, 'campaignId' => $this->campaignId]);
+                }
+            }
 
         } else if (($this->hash() != $this->hash && $options['saveLayout']) || $options['setBuildRequired']) {
             $this->update($options);
 
-            if ($options['audit'])
-                $this->audit($this->layoutId, 'Updated');
+            if ($options['audit']) {
+                $change = $this->getChangedProperties();
+                $change['campaignId'][] = $this->campaignId;
+
+                if ($this->parentId === null) {
+                    $this->audit($this->layoutId, 'Updated', $change);
+                } else {
+                    $this->audit($this->layoutId, 'Updated Draft', $change);
+                }
+            }
 
         } else {
-            $this->getLog()->info('Save layout properties unchanged for layoutId ' . $this->layoutId);
+            $this->getLog()->info('Save layout properties unchanged for layoutId ' . $this->layoutId . ', status = ' . $this->status);
         }
 
         if ($options['saveRegions']) {
@@ -592,19 +687,26 @@ class Layout implements \JsonSerializable
      */
     public function delete($options = [])
     {
-        $options = array_merge([
-            'deleteOrphanedPlaylists' => true
-        ], $options);
-
         // We must ensure everything is loaded before we delete
         if (!$this->loaded)
             $this->load();
 
-        $this->getLog()->debug('Deleting %s', $this);
+        $this->getLog()->debug('Deleting ' . $this);
 
         // We cannot delete the default default
-        if ($this->layoutId == $this->config->GetSetting('DEFAULT_LAYOUT'))
+        if ($this->layoutId == $this->config->getSetting('DEFAULT_LAYOUT'))
             throw new InvalidArgumentException(__('This layout is used as the global default and cannot be deleted'), 'layoutId');
+
+        // Delete our draft if we have one
+        // this is recursive, so be careful!
+        if ($this->parentId === null && $this->publishedStatusId === 2) {
+            try {
+                $draft = $this->layoutFactory->getByParentId($this->layoutId);
+                $draft->delete(['notify' => false]);
+            } catch (NotFoundException $notFoundException) {
+                $this->getLog()->info('No draft to delete for a Layout in the Draft state, odd!');
+            }
+        }
 
         // Delete Permissions
         foreach ($this->permissions as $permission) {
@@ -625,24 +727,40 @@ class Layout implements \JsonSerializable
             $region->delete($options);
         }
 
-        // Unassign from all Campaigns
-        foreach ($this->campaigns as $campaign) {
-            /* @var Campaign $campaign */
+        if ($this->parentId === null) {
+
+            // Delete widget history
+            $this->getStore()->update('DELETE FROM `widgethistory` WHERE layoutHistoryId IN (SELECT layoutHistoryId FROM `layouthistory` WHERE campaignId = :campaignId)', ['campaignId' => $this->campaignId]);
+
+            // Delete layout history
+            $this->getStore()->update('DELETE FROM `layouthistory` WHERE campaignId = :campaignId', ['campaignId' => $this->campaignId]);
+
+            // Unassign from all Campaigns
+            foreach ($this->campaigns as $campaign) {
+                /* @var Campaign $campaign */
+                $campaign->setChildObjectDependencies($this->layoutFactory);
+                $campaign->unassignLayout($this, true);
+                $campaign->save(['validate' => false]);
+            }
+
+            // Delete our own Campaign
+            $campaign = $this->campaignFactory->getById($this->campaignId);
             $campaign->setChildObjectDependencies($this->layoutFactory);
-            $campaign->unassignLayout($this);
-            $campaign->save(['validate' => false]);
+            $campaign->delete();
+
+            // Remove the Layout from any display defaults
+            $this->getStore()->update('UPDATE `display` SET defaultlayoutid = :defaultLayoutId WHERE defaultlayoutid = :layoutId', [
+                'layoutId' => $this->layoutId,
+                'defaultLayoutId' => $this->config->getSetting('DEFAULT_LAYOUT')
+            ]);
+
+            // Remove any display group links
+            $this->getStore()->update('DELETE FROM `lklayoutdisplaygroup` WHERE layoutId = :layoutId', ['layoutId' => $this->layoutId]);
+
+        } else {
+            // Remove the draft from any Campaign assignments
+            $this->getStore()->update('DELETE FROM `lkcampaignlayout` WHERE layoutId = :layoutId', ['layoutId' => $this->layoutId]);
         }
-
-        // Delete our own Campaign
-        $campaign = $this->campaignFactory->getById($this->campaignId);
-        $campaign->setChildObjectDependencies($this->layoutFactory);
-        $campaign->delete();
-
-        // Remove the Layout from any display defaults
-        $this->getStore()->update('UPDATE `display` SET defaultlayoutid = :defaultLayoutId WHERE defaultlayoutid = :layoutId', [
-            'layoutId' => $this->layoutId,
-            'defaultLayoutId' => $this->config->GetSetting('DEFAULT_LAYOUT')
-        ]);
 
         // Remove the Layout (now it is orphaned it can be deleted safely)
         $this->getStore()->update('DELETE FROM `layout` WHERE layoutid = :layoutId', array('layoutId' => $this->layoutId));
@@ -652,11 +770,14 @@ class Layout implements \JsonSerializable
         // Delete the cached file (if there is one)
         if (file_exists($this->getCachePath()))
             @unlink($this->getCachePath());
+
+        // Audit the Delete
+        $this->audit($this->layoutId, 'Deleted' . (($this->parentId !== null) ? ' draft for ' . $this->parentId : ''));
     }
 
     /**
      * Validate this layout
-     * @throws NotFoundException
+     * @throws XiboException
      */
     public function validate()
     {
@@ -672,14 +793,23 @@ class Layout implements \JsonSerializable
             throw new InvalidArgumentException(__("Description can not be longer than 254 characters"), 'description');
 
         // Check for duplicates
-        $duplicates = $this->layoutFactory->query(null, array('userId' => $this->ownerId, 'layoutExact' => $this->layout, 'notLayoutId' => $this->layoutId, 'disableUserCheck' => 1));
+        // exclude our own duplicate (if we're a draft)
+        $duplicates = $this->layoutFactory->query(null, [
+            'userId' => $this->ownerId,
+            'layoutExact' => $this->layout,
+            'notLayoutId' => ($this->parentId !== null) ? $this->parentId : $this->layoutId,
+            'disableUserCheck' => 1,
+            'excludeTemplates' => -1
+        ]);
 
-        if (count($duplicates) > 0)
-            throw new DuplicateEntityException(sprintf(__("You already own a layout called '%s'. Please choose another name."), $this->layout));
+        if (count($duplicates) > 0) {
+            throw new DuplicateEntityException(sprintf(__("You already own a Layout called '%s'. Please choose another name."), $this->layout));
+        }
 
         // Check zindex is positive
-        if ($this->backgroundzIndex < 0)
+        if ($this->backgroundzIndex < 0) {
             throw new InvalidArgumentException(__('Layer must be 0 or a positive number'), 'backgroundzIndex');
+        }
     }
 
     /**
@@ -709,16 +839,94 @@ class Layout implements \JsonSerializable
     {
         $this->load();
 
-        if (!in_array($tag, $this->tags))
-            $this->tags[] = $tag;
+        if ($this->tags != [$tag]) {
+
+            if (!in_array($tag, $this->tags)) {
+                $this->tags[] = $tag;
+            }
+        } else {
+            $this->getLog()->debug('No Tags to assign');
+        }
 
         return $this;
+    }
+
+    /**
+     * Add layout history
+     *  this is called when a new Layout is added, and when a Draft Layout is published
+     *  we can therefore expect to always have a Layout History record for a Layout
+     */
+    private function addLayoutHistory()
+    {
+        $this->getLog()->debug('Adding Layout History record for ' . $this->layoutId);
+
+        // Add a record in layout history when a layout is added or published
+        $this->getStore()->insert('
+          INSERT INTO `layouthistory` (campaignId, layoutId, publishedDate)
+            VALUES (:campaignId, :layoutId, :publishedDate)
+        ', [
+            'campaignId' => $this->campaignId,
+            'layoutId' => $this->layoutId,
+            'publishedDate' => $this->date->parse()->format('Y-m-d H:i:s')
+        ]);
+    }
+
+    /**
+     * Add Widget History
+     *  this should be called when the contents of a Draft Layout are destroyed during the publish process
+     *  it preserves the current state of widgets before they are removed from the database
+     *  that can then be used for proof of play stats, to get back to the original widget name/type and mediaId
+     * @param \Xibo\Entity\Layout $parent
+     * @throws \Xibo\Exception\NotFoundException
+     */
+    private function addWidgetHistory($parent)
+    {
+        // Get the most recent layout history record
+        $layoutHistoryId = $this->getStore()->select('
+            SELECT layoutHistoryId FROM `layouthistory` WHERE layoutId = :layoutId
+        ', [
+            'layoutId' => $parent->layoutId
+        ]);
+
+        if (count($layoutHistoryId) <= 0) {
+            // We are missing the parent layout history record, which isn't good.
+            // I think all we can do at this stage is log it
+            $this->getLog()->alert('Missing Layout History for layoutId ' . $parent->layoutId . ' which is on campaignId ' . $parent->campaignId);
+            return;
+        }
+
+        $layoutHistoryId = intval($layoutHistoryId[0]['layoutHistoryId']);
+
+        // Add records in the widget history table representing all widgets on this Layout
+        foreach ($parent->getWidgets() as $widget) {
+
+            // Does this widget have a mediaId
+            $mediaId = null;
+            try {
+                $mediaId = $widget->getPrimaryMediaId();
+            } catch (NotFoundException $notFoundException) {
+                // this is fine
+            }
+
+            $this->getStore()->insert('
+                INSERT INTO `widgethistory` (layoutHistoryId, widgetId, mediaId, type, name) 
+                    VALUES (:layoutHistoryId, :widgetId, :mediaId, :type, :name);
+            ', [
+                'layoutHistoryId' => $layoutHistoryId,
+                'widgetId' => $widget->widgetId,
+                'mediaId' => $mediaId,
+                'type' => $widget->type,
+                'name' => $widget->getOptionValue('name', null),
+            ]);
+        }
     }
 
     /**
      * Unassign tag
      * @param Tag $tag
      * @return $this
+     * @throws NotFoundException
+     * @throws XiboException
      */
     public function unassignTag($tag)
     {
@@ -745,29 +953,40 @@ class Layout implements \JsonSerializable
         if (!is_array($this->tags) || count($this->tags) <= 0)
             $this->tags = $this->tagFactory->loadByLayoutId($this->layoutId);
 
-        $this->unassignTags = array_udiff($this->tags, $tags, function($a, $b) {
-            /* @var Tag $a */
-            /* @var Tag $b */
-            return $a->tagId - $b->tagId;
-        });
+        if ($this->tags != $tags) {
+            $this->unassignTags = array_udiff($this->tags, $tags, function ($a, $b) {
+                /* @var Tag $a */
+                /* @var Tag $b */
+                return $a->tagId - $b->tagId;
+            });
 
-        $this->getLog()->debug('Tags to be removed: %s', json_encode($this->unassignTags));
+            $this->getLog()->debug('Tags to be removed: %s', json_encode($this->unassignTags));
 
-        // Replace the arrays
-        $this->tags = $tags;
+            // Replace the arrays
+            $this->tags = $tags;
 
-        $this->getLog()->debug('Tags remaining: %s', json_encode($this->tags));
+            $this->getLog()->debug('Tags remaining: %s', json_encode($this->tags));
+        } else {
+            $this->getLog()->debug('Tags were not changed');
+        }
     }
 
     /**
      * Export the Layout as its XLF
      * @return string
+     * @throws InvalidArgumentException
+     * @throws NotFoundException
+     * @throws XiboException
      */
     public function toXlf()
     {
-        $this->getLog()->debug('Layout toXLF for Layout %s, %d', $this->layout, $this->layoutId);
+        $this->getLog()->debug('Layout toXLF for Layout ' . $this->layout . ' - ' . $this->layoutId);
 
         $this->load(['loadPlaylists' => true]);
+
+        // Keep track of whether this layout has an empty region
+        $layoutHasEmptyRegion = false;
+        $layoutCountRegionsWithDuration = 0;
 
         $document = new \DOMDocument();
         $layoutNode = $document->createElement('layout');
@@ -775,6 +994,15 @@ class Layout implements \JsonSerializable
         $layoutNode->setAttribute('height', $this->height);
         $layoutNode->setAttribute('bgcolor', $this->backgroundColor);
         $layoutNode->setAttribute('schemaVersion', $this->schemaVersion);
+
+        // Layout stat collection flag
+        if (is_null($this->enableStat)) {
+            $layoutEnableStat =  $this->config->getSetting('LAYOUT_STATS_ENABLED_DEFAULT');
+            $this->getLog()->debug('Layout enableStat is empty. Get the default setting.');
+        } else {
+            $layoutEnableStat = $this->enableStat;
+        }
+        $layoutNode->setAttribute('enableStat', $layoutEnableStat);
 
         // Only set the z-index if present
         if ($this->backgroundzIndex != 0)
@@ -792,52 +1020,6 @@ class Layout implements \JsonSerializable
         // Track module status within the layout
         $status = 0;
         $this->clearStatusMessage();
-
-        // We need to make some assessment based on the duration
-        //  1. Find out whether any of the regions have more than 1 widget
-        //      If they do, then we will always have a region that controls duration.
-        //  2. If we don't, then find out if any of the single item regions have a duration specified
-        //      If they do, then we will always have a region that controls duration.
-        //  3. Go through each region and assess whether they are single widget regions or not.
-        //      If they are, then check to see if we have a region that governs duration and if we do set them
-        //      to expire after 1 second
-        //  4. If they are not single widget regions, then set their duration to be either the duration specified, or
-        //      the default duration if none has been specified.
-        //  5. In either case, add the duration from #4 to the region duration
-
-        $layoutHasRegionControllingDuration = false;
-        $layoutHasEmptyRegion = false;
-
-        foreach ($this->regions as $region) {
-            /* @var Region $region */
-            // Get a count of widgets in this region
-            $countWidgets = 0;
-            $hasDuration = false;
-            foreach ($region->playlists as $playlist) {
-                $countWidgets = $countWidgets + count($playlist->widgets);
-
-                foreach ($playlist->widgets as $widget) {
-                    /* @var Widget $widget */
-                    if ($widget->useDuration == 1) {
-                        $hasDuration = true;
-                        break;
-                    }
-                }
-            }
-
-            // Record whether there is an empty region
-            if ($countWidgets <= 0)
-                $layoutHasEmptyRegion = true;
-
-            // Any with more than one widget
-            // Any with duration specified?
-            if ($countWidgets > 1 || $hasDuration) {
-                $layoutHasRegionControllingDuration = true;
-            }
-        }
-
-        if ($layoutHasEmptyRegion)
-            $this->getLog()->alert('Layout ID ' . $this->layoutId . ' has an empty region');
 
         foreach ($this->regions as $region) {
             /* @var Region $region */
@@ -871,152 +1053,254 @@ class Layout implements \JsonSerializable
             $regionLoop = $region->getOptionValue('loop', 0);
 
             // Get a count of widgets in this region
-            $countWidgets = 0;
-            foreach ($region->playlists as $playlist) {
-                $countWidgets = $countWidgets + count($playlist->widgets);
+            $widgets = $region->getPlaylist()->setModuleFactory($this->moduleFactory)->expandWidgets();
+            $countWidgets = count($widgets);
+
+            if ($countWidgets <= 0) {
+                $this->getLog()->info('Layout has empty region - ' . $countWidgets . ' widgets. playlistId = ' . $region->getPlaylist()->getId());
+                $layoutHasEmptyRegion = true;
             }
 
-            foreach ($region->playlists as $playlist) {
-                /* @var Playlist $playlist */
-                foreach ($playlist->widgets as $widget) {
-                    /* @var Widget $widget */
-                    $module = $this->moduleFactory->createWithWidget($widget, $region);
-
-                    // Set the Layout Status
-                    $moduleStatus = $module->isValid();
-                    $status = ($moduleStatus > $status) ? $moduleStatus : $status;
-
-                    if ($moduleStatus > 1 && $module->getStatusMessage() != '')
-                        $this->pushStatusMessage($module->getStatusMessage());
-
-                    // Determine the duration of this widget
-                    if ($widget->useDuration == 1) {
-                        // Widget duration is as specified
-                        $widgetDuration = $widget->duration;
-
-                        // The calculated duration is the provided one
-                        $widget->calculatedDuration = $widgetDuration;
-
-                    } else if (!$layoutHasRegionControllingDuration || $countWidgets > 1 || $regionLoop == 1 || $widget->type === 'video') {
-                        // No specified duration, but we've detected that we need to use the default duration
-                        // Edge case being video - we must ensure that the default duration for video is always 0.
-                        $widgetDuration = $module->getModule()->defaultDuration;
-
-                        // The calculated duration is the "real" duration (caters for 0 videos)
-                        $widget->calculatedDuration = (($widgetDuration == 0) ? $module->getDuration(['real' => true]) : $widgetDuration);
-
-                    } else {
-                        // No specified duration, add nothing to region duration and expire the widget in 1 second
-                        $widgetDuration = Widget::$widgetMinDuration;
-
-                        // The calculated duration is 0
-                        $widget->calculatedDuration = 0;
-                    }
-
-                    // Does our widget have a durationIsPerItem and a Number of Items?
-                    $numItems = $widget->getOptionValue('numItems', 0);
-                    $itemsPerPage = $widget->getOptionValue('itemsPerPage', 0);
-                    if ($widget->getOptionValue('durationIsPerItem', 0) == 1 && $numItems > 1) {
-                        // If we have paging involved then work out the page count.
-                        if ($itemsPerPage > 0)
-                            $numItems = ceil($numItems / $itemsPerPage);
-
-                        $widget->calculatedDuration = (($widget->useDuration == 1) ? $widget->duration : $module->getModule()->defaultDuration) * $numItems;
-                    }
-
-                    // Region duration
-                    $region->duration = $region->duration + $widget->calculatedDuration;
-
-                    // We also want to add any transition OUT duration
-                    // only the OUT duration because IN durations do not get added to the widget duration by the player
-                    // https://github.com/xibosignage/xibo/issues/705
-                    if ($widget->getOptionValue('transOut', '') != '') {
-                        // Transition durations are in milliseconds
-                        $region->duration = $region->duration + ($widget->getOptionValue('transOutDuration', 0) / 1000);
-                    }
-
-                    // Create media xml node for XLF.
-                    $renderAs = $module->getModule()->renderAs;
-                    $mediaNode = $document->createElement('media');
-                    $mediaNode->setAttribute('id', $widget->widgetId);
-                    $mediaNode->setAttribute('type', $widget->type);
-                    $mediaNode->setAttribute('render', ($renderAs == '') ? 'native' : $renderAs);
-
-                    // Set the duration according to whether we are using widget duration or not
-                    $mediaNode->setAttribute('duration', $widgetDuration);
-                    $mediaNode->setAttribute('useDuration', $widget->useDuration);
-
-                    // Create options nodes
-                    $optionsNode = $document->createElement('options');
-                    $rawNode = $document->createElement('raw');
-
-                    $mediaNode->appendChild($optionsNode);
-                    $mediaNode->appendChild($rawNode);
-
-                    // Inject the URI
-                    $uriInjected = false;
-                    if ($module->getModule()->regionSpecific == 0) {
-                        $media = $this->mediaFactory->getById($widget->getPrimaryMediaId());
-                        $optionNode = $document->createElement('uri', $media->storedAs);
-                        $optionsNode->appendChild($optionNode);
-                        $uriInjected = true;
-
-                        // Add the fileId attribute to the media element
-                        $mediaNode->setAttribute('fileId', $media->mediaId);
-                    }
-
-                    foreach ($widget->widgetOptions as $option) {
-                        /* @var WidgetOption $option */
-                        if (trim($option->value) === '')
-                            continue;
-
-                        if ($option->type == 'cdata') {
-                            $optionNode = $document->createElement($option->option);
-                            $cdata = $document->createCDATASection($option->value);
-                            $optionNode->appendChild($cdata);
-                            $rawNode->appendChild($optionNode);
-                        }
-                        else if ($option->type == 'attrib' || $option->type == 'attribute') {
-
-                            if ($uriInjected && $option->option == 'uri')
-                                continue;
-
-                            $optionNode = $document->createElement($option->option, $option->value);
-                            $optionsNode->appendChild($optionNode);
-                        }
-                    }
-
-                    // Handle associated audio
-                    $audioNodes = null;
-                    foreach ($widget->audio as $audio) {
-                        /** @var WidgetAudio $audio */
-                        if ($audioNodes == null)
-                            $audioNodes = $document->createElement('audio');
-
-                        // Get the full media node for this audio element
-                        $audioMedia = $this->mediaFactory->getById($audio->mediaId);
-
-                        $audioNode = $document->createElement('uri', $audioMedia->storedAs);
-                        $audioNode->setAttribute('volume', $audio->volume);
-                        $audioNode->setAttribute('loop', $audio->loop);
-                        $audioNode->setAttribute('mediaId', $audio->mediaId);
-                        $audioNodes->appendChild($audioNode);
-                    }
-
-                    if ($audioNodes != null)
-                        $mediaNode->appendChild($audioNodes);
-
-                    // Save our widget
-                    $widget->save([
-                        'notify' => false,
-                        'saveWidgetOptions' => false
-                    ]);
-
-                    $regionNode->appendChild($mediaNode);
+            // Work out if we have any "lead regions", those are Widgets with a duration
+            foreach ($widgets as $widget) {
+                if ($widget->useDuration == 1 || $countWidgets > 1 || $regionLoop == 1 || $widget->type == 'video') {
+                    $layoutCountRegionsWithDuration++;
                 }
             }
 
-            $this->getLog()->debug('Region duration on layout %d is %d. Comparing to %d.', $this->layoutId, $region->duration, $this->duration);
+            foreach ($widgets as $widget) {
+                /* @var Widget $widget */
+                $module = $this->moduleFactory->createWithWidget($widget, $region);
+
+                // Set the Layout Status
+                try {
+                    $moduleStatus = $module->isValid();
+                } catch (XiboException $xiboException) {
+                    $moduleStatus = 4;
+
+                    // Include the exception on
+                    $this->pushStatusMessage($xiboException->getMessage());
+                }
+
+                $status = ($moduleStatus > $status) ? $moduleStatus : $status;
+
+                // Determine the duration of this widget
+                // the calculated duration contains the best guess at this duration from the playlist's perspective
+                // the only time we want to override this, is if we want it set to the Minimum Duration for the XLF
+                $widgetDuration = $widget->calculatedDuration;
+
+                // Is this Widget one that does not have a duration of its own?
+                // Assuming we have at least 1 region with a set duration, then we ought to
+                // Reset to the minimum duration
+                if ($widget->useDuration == 0 && $countWidgets <= 1 && $regionLoop == 0 && $widget->type != 'video'
+                    && $layoutCountRegionsWithDuration >= 1
+                ) {
+                    // Make sure this Widget expires immediately so that the other Regions can be the leaders when
+                    // it comes to expiring the Layout
+                    $widgetDuration = Widget::$widgetMinDuration;
+                }
+
+                // Region duration
+                $region->duration = $region->duration + $widget->calculatedDuration;
+
+                // We also want to add any transition OUT duration
+                // only the OUT duration because IN durations do not get added to the widget duration by the player
+                // https://github.com/xibosignage/xibo/issues/705
+                if ($widget->getOptionValue('transOut', '') != '') {
+                    // Transition durations are in milliseconds
+                    $region->duration = $region->duration + ($widget->getOptionValue('transOutDuration', 0) / 1000);
+                }
+
+                // Create media xml node for XLF.
+                $renderAs = $module->getModule()->renderAs;
+                $mediaNode = $document->createElement('media');
+                $mediaNode->setAttribute('id', $widget->widgetId);
+                $mediaNode->setAttribute('type', $widget->type);
+                $mediaNode->setAttribute('render', ($renderAs == '') ? 'native' : $renderAs);
+
+                // Set the duration according to whether we are using widget duration or not
+                $mediaNode->setAttribute('duration', $widgetDuration);
+                $mediaNode->setAttribute('useDuration', $widget->useDuration);
+
+                // Set a from/to date
+                if ($widget->fromDt != null || $widget->fromDt === Widget::$DATE_MIN) {
+                    $mediaNode->setAttribute('fromDt', $this->date->getLocalDate($this->date->parse($widget->fromDt, 'U')));
+                }
+
+                if ($widget->toDt != null || $widget->toDt === Widget::$DATE_MAX) {
+                    $mediaNode->setAttribute('toDt', $this->date->getLocalDate($this->date->parse($widget->toDt, 'U')));
+                }
+
+//                Logic Table
+//
+//                Widget With Media
+//                LAYOUT	MEDIA	WIDGET	Media stats collected?
+//                    ON	ON	    ON	    YES     Widget takes precedence     // Match - 1
+//                    ON	OFF	    ON	    YES     Widget takes precedence     // Match - 1
+//                    ON	INHERIT	ON	    YES     Widget takes precedence     // Match - 1
+//
+//                    OFF	ON	    ON	    YES     Widget takes precedence     // Match - 1
+//                    OFF	OFF	    ON	    YES     Widget takes precedence     // Match - 1
+//                    OFF	INHERIT	ON	    YES     Widget takes precedence     // Match - 1
+//
+//                    ON	ON	    OFF	    NO      Widget takes precedence     // Match - 2
+//                    ON	OFF	    OFF	    NO      Widget takes precedence     // Match - 2
+//                    ON	INHERIT	OFF	    NO      Widget takes precedence     // Match - 2
+//
+//                    OFF	ON	    OFF	    NO      Widget takes precedence     // Match - 2
+//                    OFF	OFF	    OFF	    NO      Widget takes precedence     // Match - 2
+//                    OFF	INHERIT	OFF	    NO      Widget takes precedence     // Match - 2
+//
+//                    ON	ON	    INHERIT	YES     Media takes precedence      // Match - 3
+//                    ON	OFF	    INHERIT	NO      Media takes precedence      // Match - 4
+//                    ON	INHERIT	INHERIT	YES     Media takes precedence and Inherited from Layout        // Match - 5
+//
+//                    OFF	ON	    INHERIT	YES     Media takes precedence      // Match - 3
+//                    OFF	OFF	    INHERIT	NO      Media takes precedence      // Match - 4
+//                    OFF	INHERIT	INHERIT	NO      Media takes precedence and Inherited from Layout        // Match - 6
+//
+//                Widget Without Media
+//                LAYOUT	WIDGET		Widget stats collected?
+//                    ON	ON		    YES	    Widget takes precedence     // Match - 1
+//                    ON	OFF		    NO	    Widget takes precedence     // Match - 2
+//                    ON	INHERIT		YES	    Inherited from Layout       // Match - 7
+//                    OFF	ON		    YES	    Widget takes precedence     // Match - 1
+//                    OFF	OFF		    NO	    Widget takes precedence     // Match - 2
+//                    OFF	INHERIT		NO	    Inherited from Layout       // Match - 8
+
+
+                // Widget stat collection flag
+                $widgetEnableStat = $widget->getOptionValue('enableStat', $this->config->getSetting('WIDGET_STATS_ENABLED_DEFAULT'));
+
+                if(($widgetEnableStat === null) || ($widgetEnableStat === "")) {
+                    $widgetEnableStat = $this->config->getSetting('WIDGET_STATS_ENABLED_DEFAULT');
+                }
+
+                $enableStat = 0; // Match - 0
+
+                if ($widgetEnableStat == 'On') {
+                    $enableStat = 1; // Match - 1
+                    $this->getLog()->debug('For '.$widget->widgetId.': Layout '. (($layoutEnableStat == 1) ? 'On': 'Off') . ' Widget '.$widgetEnableStat . '. Media node output '. $enableStat);
+                } else if ($widgetEnableStat == 'Off') {
+                    $enableStat = 0; // Match - 2
+                    $this->getLog()->debug('For '.$widget->widgetId.': Layout '. (($layoutEnableStat == 1) ? 'On': 'Off') . ' Widget '.$widgetEnableStat . '. Media node output '. $enableStat);
+                } else if ($widgetEnableStat == 'Inherit') {
+
+                    try {
+                        // Media enable stat flag - WIDGET WITH MEDIA
+                        $media = $this->mediaFactory->getById($widget->getPrimaryMediaId());
+
+                        if (($media->enableStat === null) || ($media->enableStat === "")) {
+                            $mediaEnableStat = $this->config->getSetting('MEDIA_STATS_ENABLED_DEFAULT');
+                            $this->getLog()->debug('Media enableStat is empty. Get the default setting.');
+                        } else {
+                            $mediaEnableStat = $media->enableStat;
+                        }
+
+                        if ($mediaEnableStat == 'On') {
+                            $enableStat = 1; // Match - 3
+                        } else if ($mediaEnableStat == 'Off') {
+                            $enableStat = 0; // Match - 4
+                        } else if ($mediaEnableStat == 'Inherit') {
+                            $enableStat = $layoutEnableStat;  // Match - 5 and 6
+                        }
+
+                        $this->getLog()->debug('For '.$widget->widgetId.': Layout '. (($layoutEnableStat == 1) ? 'On': 'Off') . ((isset($mediaEnableStat)) ? (' Media '.$mediaEnableStat) : '') . ' Widget '.$widgetEnableStat . '. Media node output '. $enableStat);
+
+                    } catch (\Exception $e) { //  - WIDGET WITHOUT MEDIA
+                        $this->getLog()->debug($widget->widgetId. ' is not a library media and does not have a media id.');
+                        $enableStat = $layoutEnableStat;  // Match - 7 and 8
+
+                        $this->getLog()->debug('For '.$widget->widgetId.': Layout '. (($layoutEnableStat == 1) ? 'On': 'Off') . ' Widget '.$widgetEnableStat . '. Media node output '. $enableStat);
+                    }
+                }
+
+                // automatically set the transitions on the layout xml, we are not saving widgets here to avoid deadlock issues.
+                if ($this->autoApplyTransitions == 1) {
+                    $widgetTransIn = $widget->getOptionValue('transIn', $this->config->getSetting('DEFAULT_TRANSITION_IN'));
+                    $widgetTransOut = $widget->getOptionValue('transOut', $this->config->getSetting('DEFAULT_TRANSITION_OUT'));
+                    $widgetTransInDuration = $widget->getOptionValue('transInDuration', $this->config->getSetting('DEFAULT_TRANSITION_DURATION'));
+                    $widgetTransOutDuration = $widget->getOptionValue('transOutDuration', $this->config->getSetting('DEFAULT_TRANSITION_DURATION'));
+
+                    $widget->setOptionValue('transIn', 'attrib', $widgetTransIn);
+                    $widget->setOptionValue('transInDuration', 'attrib', $widgetTransInDuration);
+                    $widget->setOptionValue('transOut', 'attrib', $widgetTransOut);
+                    $widget->setOptionValue('transOutDuration', 'attrib', $widgetTransOutDuration);
+                }
+
+                // Set enable stat collection flag
+                $mediaNode->setAttribute('enableStat', $enableStat);
+
+                // Create options nodes
+                $optionsNode = $document->createElement('options');
+                $rawNode = $document->createElement('raw');
+
+                $mediaNode->appendChild($optionsNode);
+                $mediaNode->appendChild($rawNode);
+
+                // Inject the URI
+                $uriInjected = false;
+                if ($module->getModule()->regionSpecific == 0) {
+                    $media = $this->mediaFactory->getById($widget->getPrimaryMediaId());
+                    $optionNode = $document->createElement('uri', $media->storedAs);
+                    $optionsNode->appendChild($optionNode);
+                    $uriInjected = true;
+
+                    // Add the fileId attribute to the media element
+                    $mediaNode->setAttribute('fileId', $media->mediaId);
+                }
+                //$this->getLog()->error($widget->widgetOptions, JSON_PRETTY_PRINT);
+
+
+                foreach ($widget->widgetOptions as $option) {
+
+                    //$this->getLog()->error($option->type);
+
+
+                    /* @var WidgetOption $option */
+                    if (trim($option->value) === '')
+                        continue;
+
+                    if ($option->type == 'cdata') {
+                        $optionNode = $document->createElement($option->option);
+                        $cdata = $document->createCDATASection($option->value);
+                        $optionNode->appendChild($cdata);
+                        $rawNode->appendChild($optionNode);
+                    }
+                    else if ($option->type == 'attrib' || $option->type == 'attribute') {
+
+                        if ($uriInjected && $option->option == 'uri')
+                            continue;
+
+                        $optionNode = $document->createElement($option->option, $option->value);
+                        $optionsNode->appendChild($optionNode);
+                    }
+                }
+
+                // Handle associated audio
+                $audioNodes = null;
+                foreach ($widget->audio as $audio) {
+                    /** @var WidgetAudio $audio */
+                    if ($audioNodes == null)
+                        $audioNodes = $document->createElement('audio');
+
+                    // Get the full media node for this audio element
+                    $audioMedia = $this->mediaFactory->getById($audio->mediaId);
+
+                    $audioNode = $document->createElement('uri', $audioMedia->storedAs);
+                    $audioNode->setAttribute('volume', $audio->volume);
+                    $audioNode->setAttribute('loop', $audio->loop);
+                    $audioNode->setAttribute('mediaId', $audio->mediaId);
+                    $audioNodes->appendChild($audioNode);
+                }
+
+                if ($audioNodes != null)
+                    $mediaNode->appendChild($audioNodes);
+
+                $regionNode->appendChild($mediaNode);
+            }
+
+            $this->getLog()->debug('Region duration on layout ' . $this->layoutId . ' is ' . $region->duration . '. Comparing to ' . $this->duration);
 
             // Track the max duration within the layout
             // Test this duration against the layout duration
@@ -1028,7 +1312,7 @@ class Layout implements \JsonSerializable
             // End of region loop.
         }
 
-        $this->getLog()->debug('Setting Layout Duration to %d', $this->duration);
+        $this->getLog()->debug('Setting Layout Duration to ' . $this->duration);
 
         $tagsNode = $document->createElement('tags');
 
@@ -1041,8 +1325,10 @@ class Layout implements \JsonSerializable
         $layoutNode->appendChild($tagsNode);
 
         // Update the layout status / duration accordingly
-        if ($layoutHasEmptyRegion)
+        if ($layoutHasEmptyRegion) {
             $status = 4;
+            $this->pushStatusMessage(__('Empty Region'));
+        }
 
         $this->status = ($status < $this->status) ? $status : $this->status;
 
@@ -1087,17 +1373,18 @@ class Layout implements \JsonSerializable
         $zip->addFromString('layout.json', json_encode([
             'layout' => $this->layout,
             'description' => $this->description,
-            'regions' => $regionMapping
+            'regions' => $regionMapping,
+            'layoutDefinitions' => $this
         ]));
 
         // Add the layout XLF
         $zip->addFile($this->xlfToDisk(), 'layout.xml');
 
         // Add all media
-        $libraryLocation = $this->config->GetSetting('LIBRARY_LOCATION');
+        $libraryLocation = $this->config->getSetting('LIBRARY_LOCATION');
         $mappings = [];
 
-        foreach ($this->mediaFactory->getByLayoutId($this->layoutId) as $media) {
+        foreach ($this->mediaFactory->getByLayoutId($this->layoutId, 1) as $media) {
             /* @var Media $media */
             $zip->addFile($libraryLocation . $media->storedAs, 'library/' . $media->fileName);
 
@@ -1169,9 +1456,14 @@ class Layout implements \JsonSerializable
         $dataSetIds = [];
         $dataSets = [];
 
+        // Playlists
+        $playlistMappings = [];
+        $playlistDefinitions = [];
+        $nestedPlaylistDefinitions = [];
+
         foreach ($this->getWidgets() as $widget) {
             /** @var Widget $widget */
-            if ($widget->type == 'datasetview' || $widget->type == 'ticker') {
+            if ($widget->type == 'datasetview' || $widget->type == 'datasetticker' || $widget->type == 'chart') {
                 $dataSetId = $widget->getOptionValue('dataSetId', 0);
 
                 if ($dataSetId != 0) {
@@ -1191,11 +1483,41 @@ class Layout implements \JsonSerializable
                     $dataSetIds[] = $dataSet->dataSetId;
                     $dataSets[] = $dataSet;
                 }
+            }   elseif ($widget->type == 'subplaylist') {
+                $playlistIds = json_decode($widget->getOptionValue('subPlaylistIds', []), true);
+
+                foreach ($playlistIds as $playlistId) {
+                    $count = 1;
+                    $playlist = $this->playlistFactory->getById($playlistId);
+                    $playlist->load();
+                    $playlist->expandWidgets(0, false);
+                    $playlistDefinitions[$playlist->playlistId] = $playlist;
+
+                    // this is a recursive function, we are adding Playlist definitions, Playlist mappings and DataSets existing on the nested Playlist.
+                    $playlist->generatePlaylistMapping($playlist->widgets, $playlist->playlistId,$playlistMappings, $count, $nestedPlaylistDefinitions, $dataSetIds, $dataSets, $dataSetFactory, $options['includeData']);
+                }
             }
         }
 
         // Add the mappings file to the ZIP
-        $zip->addFromString('dataSet.json', json_encode($dataSets, JSON_PRETTY_PRINT));
+        if ($dataSets != []) {
+            $zip->addFromString('dataSet.json', json_encode($dataSets, JSON_PRETTY_PRINT));
+        }
+
+        // Add the Playlist definitions to the ZIP
+        if ($playlistDefinitions != []) {
+            $zip->addFromString('playlist.json', json_encode($playlistDefinitions, JSON_PRETTY_PRINT));
+        }
+
+        // Add the nested Playlist definitions to the ZIP
+        if ($nestedPlaylistDefinitions != []) {
+            $zip->addFromString('nestedPlaylist.json', json_encode($nestedPlaylistDefinitions, JSON_PRETTY_PRINT));
+        }
+
+        // Add Playlist mappings file to the ZIP
+        if ($playlistMappings != []) {
+            $zip->addFromString('playlistMappings.json', json_encode($playlistMappings, JSON_PRETTY_PRINT));
+        }
 
         $zip->close();
     }
@@ -1204,19 +1526,49 @@ class Layout implements \JsonSerializable
      * Save the XLF to disk if necessary
      * @param array $options
      * @return string the path
+     * @throws InvalidArgumentException
+     * @throws NotFoundException
+     * @throws XiboException
      */
     public function xlfToDisk($options = [])
     {
         $options = array_merge([
             'notify' => true,
-            'collectNow' => true
+            'collectNow' => true,
+            'exceptionOnError' => false
         ], $options);
 
         $path = $this->getCachePath();
 
         if ($this->status == 3 || !file_exists($path)) {
 
-            $this->getLog()->debug('XLF needs building for Layout %d', $this->layoutId);
+            $this->getLog()->debug('XLF needs building for Layout ' . $this->layoutId);
+
+            $this->load(['loadPlaylists' => true]);
+
+            // Layout auto Publish
+            if ($this->config->getSetting('DEFAULT_LAYOUT_AUTO_PUBLISH_CHECKB') == 1 && $this->isChild()) {
+
+                // we are editing a draft layout, the published date is set on the original layout, therefore we need our parent.
+                $parent = $this->layoutFactory->loadById($this->parentId);
+
+                $layoutCurrentPublishedDate = $this->date->parse($parent->publishedDate);
+                $newPublishDateString = $this->date->getLocalDate($this->date->parse()->addMinutes(30), 'Y-m-d H:i:s');
+                $newPublishDate = $this->date->parse($newPublishDateString);
+
+                if ($layoutCurrentPublishedDate->format('U') > $newPublishDate->format('U')) {
+                    // Layout is set to Publish manually on a date further than 30 min from now, we don't touch it in this case.
+                    $this->getLog()->debug('Layout is set to Publish manually on a date further than 30 min from now, do not update');
+
+                }  elseif ($parent->publishedDate != null &&  $layoutCurrentPublishedDate->format('U') < $this->date->getLocalDate($this->date->parse()->subMinutes(5), 'U')) {
+                    // Layout is set to Publish manually at least 5 min in the past at the moment, we expect the Regular Maintenance to build it before that happens
+                    $this->getLog()->debug('Layout should be built by Regular Maintenance');
+
+                } else {
+                    $parent->setPublishedDate($newPublishDateString);
+                    $this->getLog()->debug('Layout set to automatically Publish on ' . $newPublishDateString);
+                }
+            }
 
             // Assume error
             $this->status = 4;
@@ -1228,11 +1580,23 @@ class Layout implements \JsonSerializable
             try {
                 file_put_contents($path, $this->toXlf());
             } catch (\Exception $e) {
-                $this->getLog()->error('Cannot build Layout ' . $this->layoutId . '. Unexpected error: ' . $e->getMessage());
+                $this->getLog()->error('Cannot build Layout ' . $this->layoutId . '. error: ' . $e->getMessage());
 
                 // Will continue and save the status as 4
                 $this->status = 4;
-                $this->statusMessage = 'Unexpected Error';
+
+                if ($e->getMessage() != '') {
+                    $this->pushStatusMessage($e->getMessage());
+                } else {
+                    $this->pushStatusMessage('Unexpected Error');
+                }
+                // No need to notify on an errored build
+                $options['notify'] = false;
+            }
+
+            if ($this->status === 4 && $options['exceptionOnError']) {
+                $this->audit($this->layoutId, 'Publish layout failed, rollback', ['layoutId' => $this->layoutId]);
+                throw new InvalidArgumentException(__('There is an error with this Layout: %s', implode(',', $this->getStatusMessage())), 'status');
             }
 
             $this->save([
@@ -1256,8 +1620,145 @@ class Layout implements \JsonSerializable
      */
     private function getCachePath()
     {
-        $libraryLocation = $this->config->GetSetting('LIBRARY_LOCATION');
+        $libraryLocation = $this->config->getSetting('LIBRARY_LOCATION');
         return $libraryLocation . $this->layoutId . '.xlf';
+    }
+
+    /**
+     * Publish the Draft
+     * @throws XiboException
+     */
+    public function publishDraft()
+    {
+        // We are the draft - make sure we have a parent
+        if (!$this->isChild())
+            throw new InvalidArgumentException(__('Not a Draft'), 'statusId');
+
+        // Get my parent for later
+        $parent = $this->layoutFactory->loadById($this->parentId);
+
+        // I am the draft, so I clear my parentId, and set the parentId of my parent, to myself (swapping us)
+        // Make me the parent.
+        $this->getStore()->update('UPDATE `layout` SET parentId = NULL WHERE layoutId = :layoutId', [
+            'layoutId' => $this->layoutId
+        ]);
+
+        // Set my parent, to be my child.
+        $this->getStore()->update('UPDATE `layout` SET parentId = :parentId WHERE layoutId = :layoutId', [
+            'parentId' => $this->layoutId,
+            'layoutId' => $this->parentId
+        ]);
+
+        // clear publishedDate
+        $this->getStore()->update('UPDATE `layout` SET publishedDate = null WHERE layoutId = :layoutId', [
+            'layoutId' => $this->layoutId
+        ]);
+
+        // Update any campaign links
+        $this->getStore()->update('
+          UPDATE `lkcampaignlayout` 
+            SET layoutId = :layoutId 
+           WHERE layoutId = :parentId 
+            AND campaignId IN (SELECT campaignId FROM campaign WHERE isLayoutSpecific = 0)
+        ', [
+            'parentId' => $this->parentId,
+            'layoutId' => $this->layoutId
+        ]);
+
+        // Persist things that might have changed
+        // NOTE: permissions are managed on the campaign, so we do not need to worry.
+        $this->layout = $parent->layout;
+        $this->description = $parent->description;
+        $this->retired = $parent->retired;
+        $this->enableStat = $parent->enableStat;
+
+        // Swap all tags over, any changes we've made to the parents tags should be moved to the child.
+        $this->getStore()->update('UPDATE `lktaglayout` SET layoutId = :layoutId WHERE layoutId = :parentId', [
+            'parentId' => $parent->layoutId,
+            'layoutId' => $this->layoutId
+        ]);
+
+        // Update any Displays which use this as their default Layout
+        $this->getStore()->update('UPDATE `display` SET defaultLayoutId = :layoutId WHERE defaultLayoutId = :parentId', [
+            'parentId' => $parent->layoutId,
+            'layoutId' => $this->layoutId
+        ]);
+
+        // Swap any display group links
+        $this->getStore()->update('UPDATE `lklayoutdisplaygroup` SET layoutId = :layoutId WHERE layoutId = :parentId', [
+            'layoutId' => $this->layoutId,
+            'parentId' => $parent->layoutId
+        ]);
+
+        // If this is the global default layout, then add some special handling to make sure we swap the default over
+        // to the incoming draft
+        if ($this->parentId == $this->config->getSetting('DEFAULT_LAYOUT')) {
+            // Change it over to me.
+            $this->config->changeSetting('DEFAULT_LAYOUT', $this->layoutId);
+        }
+
+        // Preserve the widget information
+        $this->addWidgetHistory($parent);
+
+        // Delete the parent (make sure we set the parent to be a child of us, otherwise we will delete the linked
+        // campaign
+        $parent->parentId = $this->layoutId;
+        $parent->tags = []; // Clear the tags so we don't attempt a delete.
+        $parent->permissions = []; // Clear the permissions so we don't attempt a delete
+        $parent->delete();
+
+        // Set my statusId to published
+        // we do not want to notify here as we should wait for the build to happen
+        $this->publishedStatusId = 1;
+        $this->save([
+            'saveLayout' => true,
+            'saveRegions' => false,
+            'saveTags' => false,
+            'setBuildRequired' => true,
+            'validate' => false,
+            'audit' => true,
+            'notify' => false
+        ]);
+
+        // Nullify my parentId (I no longer have a parent)
+        $this->parentId = null;
+
+        // Add a layout history
+        $this->addLayoutHistory();
+
+    }
+
+    public function setPublishedDate($publishedDate)
+    {
+        $this->publishedDate = $publishedDate;
+
+        $this->getStore()->update('UPDATE `layout` SET publishedDate = :publishedDate WHERE layoutId = :layoutId', [
+            'layoutId' => $this->layoutId,
+            'publishedDate' => $this->publishedDate
+        ]);
+    }
+
+    /**
+     * Discard the Draft
+     * @throws XiboException
+     */
+    public function discardDraft()
+    {
+        // We are the draft - make sure we have a parent
+        if (!$this->isChild()) {
+            $this->getLog()->debug('Cant discard draft ' . $this->layoutId . '. publishedStatusId = ' . $this->publishedStatusId . ', parentId = ' . $this->parentId);
+            throw new InvalidArgumentException(__('Not a Draft'), 'statusId');
+        }
+
+        // We just need to delete ourselves really
+        $this->delete();
+
+        // We also need to update the parent so that it is no longer draft
+        $parent = $this->layoutFactory->getById($this->parentId);
+        $parent->publishedStatusId = 1;
+        $parent->save([
+            self::$saveOptionsMinimum
+        ]);
     }
 
     //
@@ -1266,13 +1767,14 @@ class Layout implements \JsonSerializable
 
     /**
      * Add
+     * @throws XiboException
      */
     private function add()
     {
-        $this->getLog()->debug('Adding Layout ' . $this->layout);
+        $this->getLog()->debug('Adding Layout' . $this->layout);
 
-        $sql  = 'INSERT INTO layout (layout, description, userID, createdDT, modifiedDT, status, width, height, schemaVersion, backgroundImageId, backgroundColor, backgroundzIndex)
-                  VALUES (:layout, :description, :userid, :createddt, :modifieddt, :status, :width, :height, 3, :backgroundImageId, :backgroundColor, :backgroundzIndex)';
+        $sql  = 'INSERT INTO layout (layout, description, userID, createdDT, modifiedDT, publishedStatusId, status, width, height, schemaVersion, backgroundImageId, backgroundColor, backgroundzIndex, parentId, enableStat, duration, autoApplyTransitions)
+                  VALUES (:layout, :description, :userid, :createddt, :modifieddt, :publishedStatusId, :status, :width, :height, 3, :backgroundImageId, :backgroundColor, :backgroundzIndex, :parentId, :enableStat, 0, :autoApplyTransitions)';
 
         $time = $this->date->getLocalDate();
 
@@ -1282,32 +1784,59 @@ class Layout implements \JsonSerializable
             'userid' => $this->ownerId,
             'createddt' => $time,
             'modifieddt' => $time,
+            'publishedStatusId' => $this->publishedStatusId, // Default to 1 (published)
             'status' => 3,
             'width' => $this->width,
             'height' => $this->height,
             'backgroundImageId' => $this->backgroundImageId,
             'backgroundColor' => $this->backgroundColor,
             'backgroundzIndex' => $this->backgroundzIndex,
+            'parentId' => ($this->parentId == null) ? null : $this->parentId,
+            'enableStat' => $this->enableStat,
+            'autoApplyTransitions' => ($this->autoApplyTransitions == null) ? 0 : $this->autoApplyTransitions
         ));
 
         // Add a Campaign
-        $campaign = $this->campaignFactory->createEmpty();
-        $campaign->campaign = $this->layout;
-        $campaign->isLayoutSpecific = 1;
-        $campaign->ownerId = $this->getOwnerId();
-        $campaign->assignLayout($this);
+        // we do not add a campaign record for draft layouts.
+        if ($this->parentId === null) {
 
-        // Ready to save the Campaign
-        $campaign->save();
+            $campaign = $this->campaignFactory->createEmpty();
+            $campaign->campaign = $this->layout;
+            $campaign->isLayoutSpecific = 1;
+            $campaign->ownerId = $this->getOwnerId();
+            $campaign->assignLayout($this);
 
-        // Assign the new campaignId to this layout
-        $this->campaignId = $campaign->campaignId;
+            // Ready to save the Campaign
+            // adding a Layout Specific Campaign shouldn't ever notify (it can't hit anything because we've only
+            // just added it)
+            $campaign->save([
+                'notify' => false
+            ]);
+
+            // Assign the new campaignId to this layout
+            $this->campaignId = $campaign->campaignId;
+
+            // Add a layout history
+            $this->addLayoutHistory();
+
+        } else if ($this->campaignId == null) {
+            throw new InvalidArgumentException(__('Draft Layouts must have a parent'), 'campaignId');
+        } else {
+
+            // Add this draft layout as a link to the campaign
+            $campaign = $this->campaignFactory->getById($this->campaignId);
+            $campaign->setChildObjectDependencies($this->layoutFactory);
+            $campaign->assignLayout($this);
+            $campaign->save([
+                'notify' => false
+            ]);
+        }
     }
 
     /**
      * Update
      * @param array $options
-     * NOTE: We set the XML to NULL during this operation as we will always convert old layouts to the new structure
+     * @throws XiboException
      */
     private function update($options = [])
     {
@@ -1331,9 +1860,12 @@ class Layout implements \JsonSerializable
               backgroundColor = :backgroundColor,
               backgroundzIndex = :backgroundzIndex,
               `status` = :status,
+              publishedStatusId = :publishedStatusId,
               `userId` = :userId,
               `schemaVersion` = :schemaVersion,
-              `statusMessage` = :statusMessage
+              `statusMessage` = :statusMessage,
+              enableStat = :enableStat,
+              autoApplyTransitions = :autoApplyTransitions
          WHERE layoutID = :layoutid
         ';
 
@@ -1348,19 +1880,77 @@ class Layout implements \JsonSerializable
             'retired' => $this->retired,
             'width' => $this->width,
             'height' => $this->height,
-            'backgroundImageId' => $this->backgroundImageId,
+            'backgroundImageId' => ($this->backgroundImageId == null) ? null : $this->backgroundImageId,
             'backgroundColor' => $this->backgroundColor,
             'backgroundzIndex' => $this->backgroundzIndex,
             'status' => $this->status,
+            'publishedStatusId' => $this->publishedStatusId,
             'userId' => $this->ownerId,
             'schemaVersion' => $this->schemaVersion,
-            'statusMessage' => (empty($this->statusMessage)) ? null : json_encode($this->statusMessage)
+            'statusMessage' => (empty($this->statusMessage)) ? null : json_encode($this->statusMessage),
+            'enableStat' => $this->enableStat,
+            'autoApplyTransitions' => $this->autoApplyTransitions
         ));
 
         // Update the Campaign
-        $campaign = $this->campaignFactory->getById($this->campaignId);
-        $campaign->campaign = $this->layout;
-        $campaign->ownerId = $this->ownerId;
-        $campaign->save(['validate' => false, 'notify' => $options['notify'], 'collectNow' => $options['collectNow']]);
+        if ($this->parentId === null) {
+            $campaign = $this->campaignFactory->getById($this->campaignId);
+            $campaign->campaign = $this->layout;
+            $campaign->ownerId = $this->ownerId;
+            $campaign->save(['validate' => false, 'notify' => $options['notify'], 'collectNow' => $options['collectNow']]);
+        }
+    }
+
+    /**
+     * Handle the Playlist closure table for specified Layout object
+     *
+     * @param $layout
+     * @throws InvalidArgumentException
+     */
+    public function managePlaylistClosureTable($layout)
+    {
+
+        // we only need to set the closure table records for the playlists assigned directly to the regionPlaylist here
+        // all other relations between Playlists themselves are handled on import before layout is created
+        // as the SQL we run here is recursive everything will end up with correct parent/child relation and depth level.
+        foreach ($layout->getWidgets() as $widget) {
+            if ($widget->type == 'subplaylist') {
+                $assignedPlaylists = json_decode($widget->getOptionValue('subPlaylistIds', '[]'));
+                $assignedPlaylists = implode(',', $assignedPlaylists);
+
+                foreach ($layout->regions as $region) {
+                    $regionPlaylist = $region->regionPlaylist;
+
+                    if ($widget->playlistId == $regionPlaylist->playlistId) {
+                        $parentId = $regionPlaylist->playlistId;
+                        $child[] = $assignedPlaylists;
+                    }
+                }
+            }
+        }
+
+        if (isset($parentId) && isset($child)) {
+            foreach ($child as $childId) {
+
+                $this->getLog()->debug('Manage closure table for parent ' . $parentId . ' and child ' . $childId);
+
+                if ($this->getStore()->exists('SELECT parentId, childId, depth FROM lkplaylistplaylist WHERE childId = :childId AND parentId = :parentId ', [
+                    'parentId' => $parentId,
+                    'childId' => $childId
+                ])) {
+                    throw new InvalidArgumentException(__('Cannot add the same SubPlaylist twice.'), 'playlistId');
+                }
+
+                $this->getStore()->insert('
+                        INSERT INTO `lkplaylistplaylist` (parentId, childId, depth)
+                        SELECT p.parentId, c.childId, p.depth + c.depth + 1
+                          FROM lkplaylistplaylist p, lkplaylistplaylist c
+                         WHERE p.childId = :parentId AND c.parentId = :childId
+                    ', [
+                    'parentId' => $parentId,
+                    'childId' => $childId
+                ]);
+            }
+        }
     }
 }

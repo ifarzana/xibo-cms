@@ -184,6 +184,14 @@ class DataSet extends Base
                     'text' => __('View Columns')
                 );
 
+                // View RSS
+                $dataSet->buttons[] = array(
+                    'id' => 'dataset_button_viewrss',
+                    'url' => $this->urlFor('dataSet.rss.view', ['id' => $dataSet->dataSetId]),
+                    'class' => 'XiboRedirectButton',
+                    'text' => __('View RSS')
+                );
+
                 // Divider
                 $dataSet->buttons[] = ['divider' => true];
 
@@ -334,6 +342,13 @@ class DataSet extends Base
      *      required=false
      *   ),
      *  @SWG\Parameter(
+     *      name="customHeaders",
+     *      in="formData",
+     *      description="Comma separated string of custom HTTP headers",
+     *      type="string",
+     *      required=false
+     *   ),
+     *  @SWG\Parameter(
      *      name="refreshRate",
      *      in="formData",
      *      description="How often in seconds should this remote DataSet be refreshed",
@@ -406,6 +421,7 @@ class DataSet extends Base
             $dataSet->authentication = $this->getSanitizer()->getString('authentication');
             $dataSet->username = $this->getSanitizer()->getString('username');
             $dataSet->password = $this->getSanitizer()->getString('password');
+            $dataSet->customHeaders = $this->getSanitizer()->getString('customHeaders');
             $dataSet->refreshRate = $this->getSanitizer()->getInt('refreshRate');
             $dataSet->clearRate = $this->getSanitizer()->getInt('clearRate');
             $dataSet->runsAfter = $this->getSanitizer()->getInt('runsAfter');
@@ -547,6 +563,13 @@ class DataSet extends Base
      *      required=false
      *   ),
      *  @SWG\Parameter(
+     *      name="customHeaders",
+     *      in="formData",
+     *      description="Comma separated string of custom HTTP headers",
+     *      type="string",
+     *      required=false
+     *   ),
+     *  @SWG\Parameter(
      *      name="refreshRate",
      *      in="formData",
      *      description="How often in seconds should this remote DataSet be refreshed",
@@ -616,6 +639,7 @@ class DataSet extends Base
             $dataSet->authentication = $this->getSanitizer()->getString('authentication');
             $dataSet->username = $this->getSanitizer()->getString('username');
             $dataSet->password = $this->getSanitizer()->getString('password');
+            $dataSet->customHeaders = $this->getSanitizer()->getString('customHeaders');
             $dataSet->refreshRate = $this->getSanitizer()->getInt('refreshRate');
             $dataSet->clearRate = $this->getSanitizer()->getInt('clearRate');
             $dataSet->runsAfter = $this->getSanitizer()->getInt('runsAfter');
@@ -761,6 +785,13 @@ class DataSet extends Base
      *      type="string",
      *      required=false
      *   ),
+     *  @SWG\Parameter(
+     *      name="copyRows",
+     *      in="formData",
+     *      description="Flag whether to copy all the row data from the original dataSet",
+     *      type="integer",
+     *      required=false
+     *   ),
      *  @SWG\Response(
      *      response=200,
      *      description="successful operation",
@@ -773,6 +804,7 @@ class DataSet extends Base
     public function copy($dataSetId)
     {
         $dataSet = $this->dataSetFactory->getById($dataSetId);
+        $copyRows = $this->getSanitizer()->getCheckbox('copyRows', 0);
 
         if (!$this->getUser()->checkEditable($dataSet))
             throw new AccessDeniedException();
@@ -787,7 +819,11 @@ class DataSet extends Base
         $dataSet->description = $this->getSanitizer()->getString('description');
         $dataSet->code = $this->getSanitizer()->getString('code');
         $dataSet->userId = $this->getUser()->userId;
+
         $dataSet->save();
+
+        if ($copyRows === 1)
+            $dataSet->copyRows($dataSetId, $dataSet->dataSetId);
 
         // Return
         $this->getState()->hydrate([
@@ -855,10 +891,10 @@ class DataSet extends Base
     {
         $this->getLog()->debug('Import DataSet');
 
-        $libraryFolder = $this->getConfig()->GetSetting('LIBRARY_LOCATION');
+        $libraryFolder = $this->getConfig()->getSetting('LIBRARY_LOCATION');
 
         // Make sure the library exists
-        Library::ensureLibraryExists($this->getConfig()->GetSetting('LIBRARY_LOCATION'));
+        Library::ensureLibraryExists($this->getConfig()->getSetting('LIBRARY_LOCATION'));
 
         $options = array(
             'userId' => $this->getUser()->userId,
@@ -1045,6 +1081,9 @@ class DataSet extends Base
         $dataSet->username = $this->getSanitizer()->getString('username');
         $dataSet->password = $this->getSanitizer()->getString('password');
         $dataSet->dataRoot = $this->getSanitizer()->getString('dataRoot');
+
+        // Set this DataSet as active.
+        $dataSet->setActive();
 
         // Call the remote service requested
         $data = $this->dataSetFactory->callRemoteService($dataSet, null, false);

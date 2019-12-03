@@ -24,7 +24,6 @@ namespace Xibo\Widget;
 use Respect\Validation\Validator as v;
 use Xibo\Exception\ConfigurationException;
 use Xibo\Exception\InvalidArgumentException;
-use Xibo\Exception\XiboException;
 use Xibo\Factory\ModuleFactory;
 
 /**
@@ -43,6 +42,14 @@ class GoogleTraffic extends ModuleWidget
     }
 
     /**
+     * Javascript functions for the layout designer
+     */
+    public function layoutDesignerJavaScript()
+    {
+        return 'googletraffic-designer-javascript';
+    }
+
+    /**
      * Install or Update this module
      * @param ModuleFactory $moduleFactory
      */
@@ -55,7 +62,6 @@ class GoogleTraffic extends ModuleWidget
             $module->type = 'googletraffic';
             $module->class = 'Xibo\Widget\GoogleTraffic';
             $module->description = 'Google Traffic Map';
-            $module->imageUri = 'forms/library.gif';
             $module->enabled = 1;
             $module->previewEnabled = 1;
             $module->assignable = 1;
@@ -64,6 +70,7 @@ class GoogleTraffic extends ModuleWidget
             $module->schemaVersion = $this->codeSchemaVersion;
             $module->defaultDuration = 600;
             $module->settings = [];
+            $module->installName = 'googletraffic';
 
             $this->setModule($module);
             $this->installModule();
@@ -125,17 +132,18 @@ class GoogleTraffic extends ModuleWidget
     }
 
     /**
-     * Adds a Google Traffic Widget
-     * @SWG\Post(
-     *  path="/playlist/widget/googleTraffic/{playlistId}",
-     *  operationId="WidgetGoogleTrafficAdd",
+     * Edit Widget
+     *
+     * @SWG\Put(
+     *  path="/playlist/widget/{widgetId}?traffic",
+     *  operationId="widgetGoogleTrafficEdit",
      *  tags={"widget"},
-     *  summary="Add a Google Traffic Widget",
-     *  description="Add a new Google traffic Widget to the specified playlist",
+     *  summary="Edit a Google Traffic Widget",
+     *  description="Edit a Google traffic Widget. This call will replace existing Widget object, all not supplied parameters will be set to default.",
      *  @SWG\Parameter(
-     *      name="playlistId",
+     *      name="widgetId",
      *      in="path",
-     *      description="The playlist ID to add a Widget",
+     *      description="The WidgetId to Edit",
      *      type="integer",
      *      required=true
      *   ),
@@ -161,6 +169,13 @@ class GoogleTraffic extends ModuleWidget
      *      required=false
      *  ),
      *  @SWG\Parameter(
+     *      name="enableStat",
+     *      in="formData",
+     *      description="The option (On, Off, Inherit) to enable the collection of Widget Proof of Play statistics",
+     *      type="string",
+     *      required=false
+     *   ),
+     *  @SWG\Parameter(
      *      name="zoom",
      *      in="formData",
      *      description="How far should the map be zoomed in? The higher the number the closer the zoom, 1 represents entire globe",
@@ -177,107 +192,69 @@ class GoogleTraffic extends ModuleWidget
      *  @SWG\Parameter(
      *      name="longitude",
      *      in="formData",
-     *      description="The longitude for this weather widget, only pass if useDisplayLocation set to 0",
+     *      description="The longitude for this Google Traffic widget, only pass if useDisplayLocation set to 0",
      *      type="number",
      *      required=false
      *   ),
      *  @SWG\Parameter(
      *      name="latitude",
      *      in="formData",
-     *      description="The latitude for this weather widget, only pass if useDisplayLocation set to 0",
+     *      description="The latitude for this Google Traffic widget, only pass if useDisplayLocation set to 0",
      *      type="number",
      *      required=false
      *   ),
      *  @SWG\Response(
-     *      response=201,
-     *      description="successful operation",
-     *      @SWG\Schema(ref="#/definitions/Widget"),
-     *      @SWG\Header(
-     *          header="Location",
-     *          description="Location of the new widget",
-     *          type="string"
-     *      )
+     *      response=204,
+     *      description="successful operation"
      *  )
      * )
-     */
-    public function add()
-    {
-        $this->setCommonOptions();
-        $this->validate();
-
-        // Save the widget
-        $this->saveWidget();
-    }
-
-    /**
-     * Edit Media
+     *
+     * @throws \Xibo\Exception\XiboException
      */
     public function edit()
     {
-        $this->setCommonOptions();
-        $this->validate();
+        $this->setDuration($this->getSanitizer()->getInt('duration', $this->getDuration()));
+        $this->setUseDuration($this->getSanitizer()->getCheckbox('useDuration'));
+        $this->setOption('name', $this->getSanitizer()->getString('name'));
+        $this->setOption('enableStat', $this->getSanitizer()->getString('enableStat'));
+        $this->setOption('useDisplayLocation', $this->getSanitizer()->getCheckbox('useDisplayLocation'));
+        $this->setOption('longitude', $this->getSanitizer()->getDouble('longitude'));
+        $this->setOption('latitude', $this->getSanitizer()->getDouble('latitude'));
+        $this->setOption('zoom', $this->getSanitizer()->getInt('zoom'));
+
+        $this->isValid();
 
         // Save the widget
         $this->saveWidget();
     }
 
-    /**
-     * Validate
-     */
-    private function validate()
+    /** @inheritdoc */
+    public function isValid()
     {
         if ($this->getUseDuration() == 1 && $this->getDuration() == 0)
-            throw new \InvalidArgumentException(__('Please enter a duration'));
+            throw new InvalidArgumentException(__('Please enter a duration'), 'duration');
 
         if ($this->getOption('zoom') == '')
-            throw new \InvalidArgumentException(__('Please enter a zoom level'));
+            throw new InvalidArgumentException(__('Please enter a zoom level'), 'zoom');
 
         if ($this->getOption('useDisplayLocation') == 0) {
             // Validate lat/long
             if (!v::latitude()->validate($this->getOption('latitude')))
-                throw new \InvalidArgumentException(__('The latitude entered is not valid.'));
+                throw new InvalidArgumentException(__('The latitude entered is not valid.'), 'latitude');
 
             if (!v::longitude()->validate($this->getOption('longitude')))
-                throw new \InvalidArgumentException(__('The longitude entered is not valid.'));
+                throw new InvalidArgumentException(__('The longitude entered is not valid.'), 'longitude');
         }
 
         // Check the duration against the minDuration setting
         $minDuration = $this->getSetting('minDuration', 600);
         if ($this->getUseDuration() == 1 && $this->getDuration() < $minDuration)
             throw new InvalidArgumentException(__('The minimum duration for this Widget is %d.', $minDuration), 'duration');
-    }
 
-    /**
-     * Set common options
-     */
-    private function setCommonOptions()
-    {
-        $this->setDuration($this->getSanitizer()->getInt('duration', $this->getDuration()));
-        $this->setUseDuration($this->getSanitizer()->getCheckbox('useDuration'));
-        $this->setOption('name', $this->getSanitizer()->getString('name'));
-        $this->setOption('useDisplayLocation', $this->getSanitizer()->getCheckbox('useDisplayLocation'));
-        $this->setOption('longitude', $this->getSanitizer()->getDouble('longitude'));
-        $this->setOption('latitude', $this->getSanitizer()->getDouble('latitude'));
-        $this->setOption('zoom', $this->getSanitizer()->getInt('zoom'));
+        return self::$STATUS_PLAYER;
     }
 
     /** @inheritdoc */
-    public function isValid()
-    {
-        // Using the information you have in your module calculate whether it is valid or not.
-        // 0 = Invalid
-        // 1 = Valid
-        // 2 = Unknown
-        return 2;
-    }
-
-    /**
-     * GetResource
-     * Return the rendered resource to be used by the client (or a preview) for displaying this content.
-     * @param integer $displayId If this comes from a real client, this will be the display id.
-     * @return mixed
-     * @throws XiboException
-     */
     public function getResource($displayId = 0)
     {
         // Behave exactly like the client.
@@ -287,8 +264,8 @@ class GoogleTraffic extends ModuleWidget
             throw new ConfigurationException(__('Module not configured. Missing API Key.'));
 
         // Get the lat/long
-        $defaultLat = $this->getConfig()->GetSetting('DEFAULT_LAT');
-        $defaultLong = $this->getConfig()->GetSetting('DEFAULT_LONG');
+        $defaultLat = $this->getConfig()->getSetting('DEFAULT_LAT');
+        $defaultLong = $this->getConfig()->getSetting('DEFAULT_LONG');
 
         if ($this->getOption('useDisplayLocation') == 1) {
             // Use the display ID or the default.
@@ -337,5 +314,11 @@ class GoogleTraffic extends ModuleWidget
     public function getCacheKey($displayId)
     {
         return $this->getWidgetId() . (($this->getOption('useDisplayLocation') == 1 || $displayId === 0) ? '_' . $displayId : '');
+    }
+
+    /** @inheritdoc */
+    public function isCacheDisplaySpecific()
+    {
+        return ($this->getOption('useDisplayLocation') == 1);
     }
 }

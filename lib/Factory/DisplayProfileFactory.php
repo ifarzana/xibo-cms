@@ -1,13 +1,25 @@
 <?php
-/*
- * Spring Signage Ltd - http://www.springsignage.com
- * Copyright (C) 2015 Spring Signage Ltd
- * (DisplayProfileFactory.php)
+/**
+ * Copyright (C) 2019 Xibo Signage Ltd
+ *
+ * Xibo - Digital Signage - http://www.xibo.org.uk
+ *
+ * This file is part of Xibo.
+ *
+ * Xibo is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * any later version.
+ *
+ * Xibo is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with Xibo.  If not, see <http://www.gnu.org/licenses/>.
  */
-
-
 namespace Xibo\Factory;
-
 
 use Symfony\Component\EventDispatcher\EventDispatcherInterface;
 use Xibo\Entity\DisplayProfile;
@@ -59,13 +71,16 @@ class DisplayProfileFactory extends BaseFactory
      */
     public function createEmpty()
     {
-        return new DisplayProfile(
+        $displayProfile = new DisplayProfile(
             $this->getStore(),
             $this->getLog(),
             $this->config,
             $this->dispatcher,
             $this->commandFactory
         );
+        $displayProfile->config = [];
+
+        return $displayProfile;
     }
 
     /**
@@ -122,7 +137,7 @@ class DisplayProfileFactory extends BaseFactory
     /**
      * Get by Command Id
      * @param $commandId
-     * @return array[DisplayProfile]
+     * @return DisplayProfile[]
      * @throws NotFoundException
      */
     public function getByCommandId($commandId)
@@ -161,22 +176,8 @@ class DisplayProfileFactory extends BaseFactory
 
             // Filter by DisplayProfile Name?
             if ($this->getSanitizer()->getString('displayProfile', $filterBy) != null) {
-                // convert into a space delimited array
-                $names = explode(' ', $this->getSanitizer()->getString('displayProfile', $filterBy));
-
-                $i = 0;
-                foreach ($names as $searchName) {
-                    $i++;
-                    // Not like, or like?
-                    if (substr($searchName, 0, 1) == '-') {
-                        $body .= " AND  `displayprofile`.name NOT LIKE :search$i ";
-                        $params['search' . $i] = '%' . ltrim(($searchName), '-') . '%';
-                    }
-                    else {
-                        $body .= " AND  `displayprofile`.name LIKE :search$i ";
-                        $params['search' . $i] = '%' . $searchName . '%';
-                    }
-                }
+                $terms = explode(',', $this->getSanitizer()->getString('displayProfile', $filterBy));
+                $this->nameFilter('displayprofile', 'name', $terms, $body, $params);
             }
 
             if ($this->getSanitizer()->getString('type', $filterBy) != null) {
@@ -212,7 +213,11 @@ class DisplayProfileFactory extends BaseFactory
 
 
             foreach ($this->getStore()->select($sql, $params) as $row) {
-                $profiles[] = $this->createEmpty()->hydrate($row);
+                $profile = $this->createEmpty()->hydrate($row, ['intProperties' => ['isDefault']]);
+
+                $profile->excludeProperty('configDefault');
+                $profile->excludeProperty('configTabs');
+                $profiles[] = $profile;
             }
 
             // Paging

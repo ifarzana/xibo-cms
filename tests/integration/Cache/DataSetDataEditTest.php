@@ -69,15 +69,20 @@ class DataSetDataEditTest extends LocalWebTestCase
         // Create a Layout
         $this->layout = $this->createLayout();
 
+        // Checkout
+        $layout = $this->getDraft($this->layout);
+
         // Add a couple of text widgets to the region
-        $response = $this->getEntityProvider()->post('/playlist/widget/datasetview/' . $this->layout->regions[0]->playlists[0]['playlistId'], [
-            'name' => Random::generateString(),
-            'dataSetId' => $this->dataSet->dataSetId,
-            'duration' => 100,
-            'useDuration' => 1
+        $response = $this->getEntityProvider()->post('/playlist/widget/datasetview/' . $layout->regions[0]->regionPlaylist->playlistId);
+        $response = $this->getEntityProvider()->put('/playlist/widget/' . $response['widgetId'], [
+            'step' => 1,
+            'dataSetId' => $this->dataSet->dataSetId
         ]);
 
         $this->widget = (new XiboDataSetView($this->getEntityProvider()))->hydrate($response);
+
+        // Check in
+        $this->layout = $this->publish($this->layout);
 
         // Set the Layout status
         $this->setLayoutStatus($this->layout, 1);
@@ -88,7 +93,7 @@ class DataSetDataEditTest extends LocalWebTestCase
         // Schedule the Layout "always" onto our display
         //  deleting the layout will remove this at the end
         $event = (new XiboSchedule($this->getEntityProvider()))->createEventLayout(
-            date('Y-m-d H:i:s', time()+3600),
+            date('Y-m-d H:i:s', time()),
             date('Y-m-d H:i:s', time()+7200),
             $this->layout->campaignId,
             [$this->display->displayGroupId],
@@ -96,6 +101,7 @@ class DataSetDataEditTest extends LocalWebTestCase
             NULL,
             NULL,
             NULL,
+            0,
             0,
             0
         );

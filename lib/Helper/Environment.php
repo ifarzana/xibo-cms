@@ -1,29 +1,89 @@
 <?php
-/*
- * Spring Signage Ltd - http://www.springsignage.com
- * Copyright (C) 2018 Spring Signage Ltd
- * (Environment.php)
+/**
+ * Copyright (C) 2019 Xibo Signage Ltd
+ *
+ * Xibo - Digital Signage - http://www.xibo.org.uk
+ *
+ * This file is part of Xibo.
+ *
+ * Xibo is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * any later version.
+ *
+ * Xibo is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with Xibo.  If not, see <http://www.gnu.org/licenses/>.
  */
-
-
 namespace Xibo\Helper;
+use Phinx\Console\PhinxApplication;
+use Phinx\Wrapper\TextWrapper;
 
-
+/**
+ * Class Environment
+ * @package Xibo\Helper
+ */
 class Environment
 {
-    public static $WEBSITE_VERSION_NAME = '1.8.12';
-    public static $WEBSITE_VERSION = 143;
-
-    public static $VERSION_REQUIRED = '5.5';
+    public static $WEBSITE_VERSION_NAME = '2.2.1';
+    public static $XMDS_VERSION = '5';
+    public static $XLF_VERSION = '2';
+    public static $VERSION_REQUIRED = '7.0.8';
     public static $VERSION_UNSUPPORTED = '8.0';
+
+    /** @var null cache migration status for the whole request */
+    private static $_migration_status = null;
+
+    /**
+     * Is there a migration pending?
+     * @return bool
+     */
+    public static function migrationPending()
+    {
+        return (self::getMigrationStatus() != 0);
+    }
+
+    /**
+     * Get Migration Status
+     * @return int
+     */
+    private static function getMigrationStatus()
+    {
+        if (self::$_migration_status === null) {
+            // Use a Phinx text wrapper to work out what the current status is
+            // make sure this does not output anything to our output buffer
+            ob_start();
+            $phinx = new TextWrapper(new PhinxApplication(), ['configuration' => PROJECT_ROOT . '/phinx.php']);
+            $phinx->getStatus();
+
+            self::$_migration_status = $phinx->getExitCode();
+            ob_end_clean();
+        }
+
+        return self::$_migration_status;
+    }
 
     /**
      * Check FileSystem Permissions
      * @return bool
      */
-    public static function checkFsPermissions()
+    public static function checkSettingsFileSystemPermissions()
     {
-        return (is_writable(PROJECT_ROOT . "/web/settings.php") || is_writable(PROJECT_ROOT . "/cache"));
+        $settingsPath = PROJECT_ROOT . '/web/settings.php';
+        return (file_exists($settingsPath)) ? is_writable($settingsPath) : is_writable(PROJECT_ROOT . '/web');
+    }
+
+    /**
+     * Check FileSystem Permissions
+     * @return bool
+     */
+    public static function checkCacheFileSystemPermissions()
+    {
+        return is_writable(PROJECT_ROOT . '/cache');
     }
 
     /**

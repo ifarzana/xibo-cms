@@ -22,12 +22,18 @@
                             </ul>
                             <div class="tab-content">
                                 <div class="tab-pane active" id="general-filter">
+                                    {% set title %}{% trans "ID" %}{% endset %}
+                                    {{ inline.number("layoutId", title) }}
+
                                     {% set title %}{% trans "Name" %}{% endset %}
                                     {{ inline.input("layout", title) }}
 
                                     {% set title %}{% trans "Tags" %}{% endset %}
-                                    {% set helpText %}{% trans "A comma separated list of tags to filter by. Enter --no-tag to see items without tags." %}{% endset %}
+                                    {% set helpText %}{% trans "A comma separated list of tags to filter by. Enter a Tag value preceded with | to filter by Tag values. Enter --no-tag to see items without tags." %}{% endset %}
                                     {{ inline.inputWithTags("tags", title, null, helpText) }}
+
+                                    {% set title %}{% trans "Exact match?" %}{% endset %}
+                                    {{ inline.checkbox("exactTags", title) }}
 
                                     {% set attributes = [
                                     { name: "data-allow-clear", value: "true" },
@@ -42,6 +48,10 @@
                                     {% set title %}{% trans "Owner User Group" %}{% endset %}
                                     {% set helpText %}{% trans "Show items owned by users in the selected User Group." %}{% endset %}
                                     {{ inline.dropdown("ownerUserGroupId", "single", title, "", [{groupId:null, group:""}]|merge(groups), "groupId", "group", helpText, "selectPicker", "", "", "", attributes) }}
+
+                                    {% set title %}{% trans "Display Group" %}{% endset %}
+                                    {% set helpText %}{% trans "Show Layouts active on the selected Display / Display Group" %}{% endset %}
+                                    {{ inline.dropdown("activeDisplayGroupId", "single", title, "", [{displayGroupId:null, displayGroup:""}]|merge(displayGroups), "displayGroupId", "displayGroup", helpText, "selectPicker", "", "", "", attributes) }}
 
                                 </div>
                                 <div class="tab-pane" id="advanced-filter">
@@ -79,16 +89,18 @@
                             <tr>
                                 <th>{% trans "ID" %}</th>
                                 <th>{% trans "Name" %}</th>
+                                <th>{% trans "Status" %}</th>
                                 <th>{% trans "Description" %}</th>
                                 <th>{% trans "Duration" %}</th>
                                 <th>{% trans "Tags" %}</th>
                                 <th>{% trans "Thumbnail" %}</th>
                                 <th>{% trans "Owner" %}</th>
                                 <th>{% trans "Permissions" %}</th>
-                                <th>{% trans "Status" %}</th>
+                                <th>{% trans "Valid?" %}</th>
+                                <th>{% trans "Stats?" %}</th>
                                 <th>{% trans "Created" %}</th>
                                 <th>{% trans "Modified" %}</th>
-                                <th></th>
+                                <th>{% trans "Row Menu" %}</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -109,9 +121,10 @@
                 "language": dataTablesLanguage,
                 "lengthMenu": [10, 25, 50, 100, 250, 500],
                 serverSide: true,
-                stateSave: true, stateDuration: 0,
+                stateSave: true,
+                stateDuration: 0,
                 stateLoadCallback: function (settings, callback) {
-                    var data;
+                    var data = {};
                     $.ajax({
                         type: "GET",
                         async: false,
@@ -157,6 +170,26 @@
                         "render": dataTableSpacingPreformatted
                     },
                     {
+                        "name": "publishedStatus",
+                        "data": function (data, type) {
+                            if (data.publishedDate != null) {
+                                let now = moment();
+                                let published = moment(data.publishedDate);
+                                let differenceMinutes = published.diff(now, 'minutes');
+                                let momentDifference = moment(now).to(published);
+
+                                if (differenceMinutes < -5) {
+                                    return data.publishedStatus.concat(" - ", data.publishedStatusFailed);
+                                } else {
+                                    return data.publishedStatus.concat(" - ", data.publishedStatusFuture.replace('%s', momentDifference));
+                                }
+                            } else {
+                                return data.publishedStatus;
+                            }
+
+                        }
+                    },
+                    {
                         "name": "description",
                         "data": null,
                         "render": {"_": "description", "display": "descriptionFormatted", "sort": "description"}
@@ -194,7 +227,7 @@
                             var icon = "";
                             if (data.status == 1)
                                 icon = "fa-check";
-                            else if (data.status == 0)
+                            else if (data.status == 0 || data.status == 4)
                                 icon = "fa-times";
                             else if (data.status == 3)
                                 icon = "fa-cogs";
@@ -202,6 +235,19 @@
                                 icon = "fa-exclamation";
 
                             return "<span class='fa " + icon + "' title='" + (data.statusDescription) + ((data.statusMessage == null) ? "" : " - " + (data.statusMessage)) + "'></span>";
+                        }
+                    },
+                    {
+                        "name": "enableStat",
+                        "data": function (data) {
+
+                            var icon = "";
+                            if (data.enableStat == 1)
+                                icon = "fa-check";
+                            else
+                                icon = "fa-times";
+
+                            return "<span class='fa " + icon + "' title='" + (data.enableStatDescription) + "'></span>";
                         }
                     },
                     {
@@ -238,6 +284,7 @@
                         addFiles: "{% trans "Add ZIP Files" %}",
                         startUpload: "{% trans "Start upload" %}",
                         cancelUpload: "{% trans "Cancel upload" %}",
+                        processing: "{% trans "Processing..." %}",
                         replaceExistingMediaMessage: "{% trans "Replace Existing Media?" %}",
                         importTagsMessage: "{% trans "Import Tags?" %}",
                         useExistingDataSetsMessage: "{% trans "Use existing DataSets matched by name?" %}",
@@ -303,6 +350,10 @@
 
                     inputs.filter("input").prop("disabled", true);
                 }).bind('fileuploadstart', function (e, data) {
+                    // Show progress data
+                    form.find('.fileupload-progress .progress-extended').show();
+                    form.find('.fileupload-progress .progress-end').hide();
+
                     if (form.fileupload("active") <= 0)
                         refreshSessionInterval = setInterval("XiboPing('" + pingUrl + "?refreshSession=true')", 1000 * 60 * 3);
 
@@ -310,6 +361,22 @@
                 }).bind('fileuploaddone', function (e, data) {
                     if (refreshSessionInterval != null && form.fileupload("active") <= 0)
                         clearInterval(refreshSessionInterval);
+                }).bind('fileuploadprogressall', function(e, data) {
+                    // Hide progress data and show processing
+                    if(data.total > 0 && data.loaded == data.total) {
+                        form.find('.fileupload-progress .progress-extended').hide();
+                        form.find('.fileupload-progress .progress-end').show();
+                    }
+                }).bind('fileuploadadded fileuploadcompleted fileuploadfinished', function (e, data) {
+                    // Get uploaded and downloaded files and toggle Done button
+                    var filesToUploadCount = form.find('tr.template-upload').length;
+                    var $button = form.parents('.modal:first').find('button[data-bb-handler="main"]');
+
+                    if(filesToUploadCount == 0) {
+                        $button.removeAttr('disabled');
+                    } else {
+                        $button.attr('disabled', 'disabled');
+                    }
                 });
 
                 // Configure the active behaviour of the checkboxes
@@ -369,6 +436,18 @@
             });
         }
 
+        function setEnableStatMultiSelectFormOpen(dialog) {
+            var $input = $('<input type=checkbox id="enableStat" name="enableStat"> {% trans %} Enable Stats Collection? {% endtrans %} </input>');
+            var $helpText = $('<span class="help-block">Check to enable the collection of Proof of Play statistics for the selected items. </span>');
+
+            $input.on('change', function() {
+                dialog.data().commitData = {enableStat: $(this).val()};
+            });
+
+            $(dialog).find('.modal-body').append($input);
+            $(dialog).find('.modal-body').append($helpText);
+        }
+
     </script>
 {% endblock %}
 
@@ -411,6 +490,8 @@
                         </div>
                         <!-- The extended global progress information -->
                         <div class="progress-extended">&nbsp;</div>
+                        <!-- Processing info container -->
+                    <div class="progress-end" style="display:none;">{{ trans.processing }}</div>
                     </div>
                 </div>
                 <div class="row">

@@ -46,11 +46,14 @@ class DisplayGroupDynamicDisplayTest extends LocalWebTestCase
         // Create a Layout
         $this->layout = $this->createLayout();
 
-        $response = $this->getEntityProvider()->post('/playlist/widget/text/' . $this->layout->regions[0]->playlists[0]['playlistId'], [
-            'text' => 'Widget A',
-            'duration' => 100,
-            'useDuration' => 1
-        ]);
+        // Checkout
+        $layout = $this->getDraft($this->layout);
+
+        // Add a simple widget
+        $this->addSimpleWidget($layout);
+
+        // Check us in again
+        $this->layout = $this->publish($this->layout);
 
         // Create a Display Group
         // this matches all displays created by the test suite
@@ -65,7 +68,7 @@ class DisplayGroupDynamicDisplayTest extends LocalWebTestCase
         // Schedule the Layout "always" onto our display group
         //  deleting the layout will remove this at the end
         $event = (new XiboSchedule($this->getEntityProvider()))->createEventLayout(
-            date('Y-m-d H:i:s', time()+3600),
+            date('Y-m-d H:i:s', time()),
             date('Y-m-d H:i:s', time()+7200),
             $this->layout->campaignId,
             [$this->displayGroup->displayGroupId],
@@ -73,6 +76,7 @@ class DisplayGroupDynamicDisplayTest extends LocalWebTestCase
             NULL,
             NULL,
             NULL,
+            0,
             0,
             0
         );
