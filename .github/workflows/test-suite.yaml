@@ -39,5 +39,8 @@ jobs:
           sleep 5
       - name: Run Code Sniffer
         run: |
-          docker exec --user apache -t cms-web /bin/bash -c "cd  /var/www/cms/; vendor/bin/phpcs --standard=vendor/xibosignage/support/src/Standards/xibo_ruleset.xml --report=json --file-list=files.txt > phpcs.json || true"
-          docker exec --user apache -t cms-web /bin/bash -c "cd  /var/www/cms/; vendor/bin/diffFilter --phpcs diff.txt phpcs.json"
+          docker exec --user apache -t cms-web /bin/bash -c "cd  /var/www/cms/; if [[ -s "files.txt" ]]; then echo "files.txt exists."; fi"
+          if [[ -s "files.txt" ]]; then
+            docker exec --user apache -t cms-web /bin/bash -c "cd  /var/www/cms/; vendor/bin/phpcs --standard=vendor/xibosignage/support/src/Standards/xibo_ruleset.xml --report=json --file-list=files.txt > phpcs.json || true"
+            docker exec --user apache -t cms-web /bin/bash -c "cd  /var/www/cms/; vendor/bin/diffFilter --phpcs diff.txt phpcs.json"
+          fi
