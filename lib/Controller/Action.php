@@ -183,7 +183,7 @@ class Action  extends Base
         $parsedParams = $this->getSanitizer($request->getQueryParams());
 
         $filter = [
-            'actionId' => $parsedParams->getInt('actionId'),
+            'actionId' => $parsedParams->getInt("actionId"),
             'ownerId' => $parsedParams->getInt('ownerId'),
             'triggerType' => $parsedParams->getString('triggerType'),
             'triggerCode' => $parsedParams->getString('triggerCode'),
