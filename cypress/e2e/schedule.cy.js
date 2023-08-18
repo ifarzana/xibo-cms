@@ -139,6 +139,13 @@ describe('Campaigns', function() {
 
     // Create Command Schedule
     cy.get('.col-sm-10 > #eventTypeId').select('Command', {force: true});
+    cy.get(':nth-child(3) > .col-sm-10 > .select2 > .selection > .select2-selection > .select2-selection__rendered')
+        .type('List Campaign Display 1');
+    // Wait for Display to load and select the display
+    cy.wait('@loadDisplaygroups');
+    cy.get('.select2-container--open').contains('List Campaign Display 1');
+    cy.get('.select2-container--open .select2-dropdown .select2-results > ul > li').should('have.length', 2);
+    cy.get('#select2-displayGroupIds-results > li > ul > li:first').contains('List Campaign Display 1').click();
 
     cy.get('.starttime-control > .col-sm-10 > .input-group > .datePickerHelper').click();
     cy.get('.open > .flatpickr-innerContainer > .flatpickr-rContainer > .flatpickr-days > .dayContainer > .today').click();
