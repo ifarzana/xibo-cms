@@ -64,18 +64,19 @@ describe('Campaigns', function() {
     // Wait for Display to load and select the display
     cy.wait('@loadDisplaygroups');
     cy.get('.select2-container--open').contains('List Campaign Display 1');
+    cy.get('.select2-container--open .select2-dropdown .select2-results > ul > li').should('have.length', 2);
+    cy.get('#select2-displayGroupIds-results > li > ul > li:first').contains('List Campaign Display 1').click();
+
+    // Select day part and campaign
+    cy.get('[name="dayPartId"]').select('Always', {force: true});
+    cy.get('.layout-control > .col-sm-10 > .select2 > .selection > .select2-selection').type('Campaign for Schedule 1');
+    cy.wait('@loadListCampaigns');
+    cy.get('.select2-container--open').contains('Campaign for Schedule 1');
     cy.get('.select2-container--open .select2-results > ul > li:first').click();
-    //
-    // // Select day part and campaign
-    // cy.get('[name="dayPartId"]').select('Always', {force: true});
-    // cy.get('.layout-control > .col-sm-10 > .select2 > .selection > .select2-selection').type('Campaign for Schedule 1');
-    // cy.wait('@loadListCampaigns');
-    // cy.get('.select2-container--open').contains('Campaign for Schedule 1');
-    // cy.get('.select2-container--open .select2-results > ul > li:first').click();
-    //
-    // // Click Next and check toast message
-    // cy.get('.modal .modal-footer').contains('Next').click();
-    // cy.contains('Added Event');
+
+    // Click Next and check toast message
+    cy.get('.modal .modal-footer').contains('Next').click();
+    cy.contains('Added Event');
   });
 
   it('should schedule an event layout that has no priority, no recurrence', function() {
@@ -96,6 +97,15 @@ describe('Campaigns', function() {
 
     // Layout
     cy.get('.col-sm-10 > #eventTypeId').select('Layout', {force: true});
+    cy.get(':nth-child(3) > .col-sm-10 > .select2 > .selection > .select2-selection > .select2-selection__rendered')
+        .type('List Campaign Display 1');
+    // Wait for Display to load and select the display
+    cy.wait('@loadDisplaygroups');
+    cy.get('.select2-container--open').contains('List Campaign Display 1');
+    cy.get('.select2-container--open .select2-dropdown .select2-results > ul > li').should('have.length', 2);
+    cy.get('#select2-displayGroupIds-results > li > ul > li:first').contains('List Campaign Display 1').click();
+    cy.get('[name="dayPartId"]').select('Always', {force: true});
+
     // Select Layout
     cy.get('.layout-control > .col-sm-10 > .select2 > .selection > .select2-selection')
       .type('Layout for Schedule 1');
@@ -106,6 +116,7 @@ describe('Campaigns', function() {
     cy.get('.select2-container--open .select2-results > ul > li').should('have.length', 1);
     cy.get('.select2-container--open .select2-results > ul > li:first').contains('Layout for Schedule 1').click();
     cy.get('.modal .modal-footer').contains('Next').click();
+    cy.contains('Added Event');
   });
 
   it('should schedule an event command/overlay layout that has no priority, no recurrence', function() {
