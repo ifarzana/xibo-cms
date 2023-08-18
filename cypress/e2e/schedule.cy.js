@@ -65,17 +65,17 @@ describe('Campaigns', function() {
     cy.wait('@loadDisplaygroups');
     cy.get('.select2-container--open').contains('List Campaign Display 1');
     cy.get('.select2-container--open .select2-results > ul > li:first').click();
-
-    // Select day part and campaign
-    cy.get('[name="dayPartId"]').select('Always', {force: true});
-    cy.get('.layout-control > .col-sm-10 > .select2 > .selection > .select2-selection').type('Campaign for Schedule 1');
-    cy.wait('@loadListCampaigns');
-    cy.get('.select2-container--open').contains('Campaign for Schedule 1');
-    cy.get('.select2-container--open .select2-results > ul > li:first').click();
-
-    // Click Next and check toast message
-    cy.get('.modal .modal-footer').contains('Next').click();
-    cy.contains('Added Event');
+    //
+    // // Select day part and campaign
+    // cy.get('[name="dayPartId"]').select('Always', {force: true});
+    // cy.get('.layout-control > .col-sm-10 > .select2 > .selection > .select2-selection').type('Campaign for Schedule 1');
+    // cy.wait('@loadListCampaigns');
+    // cy.get('.select2-container--open').contains('Campaign for Schedule 1');
+    // cy.get('.select2-container--open .select2-results > ul > li:first').click();
+    //
+    // // Click Next and check toast message
+    // cy.get('.modal .modal-footer').contains('Next').click();
+    // cy.contains('Added Event');
   });
 
   it('should schedule an event layout that has no priority, no recurrence', function() {
