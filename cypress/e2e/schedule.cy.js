@@ -230,7 +230,7 @@ describe('Campaigns', function() {
     cy.selectOption(layoutSchedule1);
 
     // Should have 1
-    // cy.get('#schedule-grid tbody tr').should('have.length', 2);
+    cy.get('#schedule-grid tbody tr').should('have.length', 3);
     cy.get('#schedule-grid tr:first-child .dropdown-toggle').click();
     cy.get('#schedule-grid tr:first-child .schedule_button_edit').click();
 
