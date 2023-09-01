@@ -62,7 +62,8 @@ jobs:
         run: |
           # Move Cypress screenshots to a separate directory for failed tests
           mkdir -p cypress/screenshots-failed
-          mv cypress/screenshots/* cypress/screenshots-failed/
+          ls -la
+          mv app/results/* cypress/screenshots-failed/
         continue-on-error: true  # Continue the workflow even if the screenshot move fails
       - name: Archive Failed Screenshots
         if: always()  # Always run this step to archive screenshots, even if the previous steps failed
