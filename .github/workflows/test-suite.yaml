@@ -58,8 +58,17 @@ jobs:
           docker exec cms-db mysql -ucms -pjenkins cms -e "INSERT INTO oauth_client_scopes (clientId, scopeId) VALUES ('MrGPc7e3IL1hA6w13l7Ru5giygxmNiafGNhFv89d', 'all') ON DUPLICATE KEY UPDATE scopeId = scopeId"
           docker run --ipc=host --name cms-cypress --link=cms-web:web -v $(pwd)/cypress.config.js:/app/cypress.config.js -v $(pwd)/cypress:/app/cypress ghcr.io/xibosignage/xibo-cms:cypress bash -c "CYPRESS_baseUrl=http://web /app/node_modules/.bin/cypress run --config screenshotsFolder=/app/results,video=false --reporter junit --reporter-options 'mochaFile=/app/results/results_cypress_[hash].xml,toConsole=true'"
         continue-on-error: true
-      - name: Upload Test Results as Artifact
+      - name: Save Cypress Screenshots on Failure
+        if: failure()
+        run: |
+          # Move Cypress screenshots to a separate directory for failed tests
+          mkdir -p cypress/screenshots-failed
+          mv cypress/screenshots/* cypress/screenshots-failed/
+        continue-on-error: true  # Continue the workflow even if the screenshot move fails
+
+      - name: Archive Failed Screenshots
+        if: always()  # Always run this step to archive screenshots, even if the previous steps failed
         uses: actions/upload-artifact@v2
         with:
-          name: cypress-test-results
-          path: app/results # Path to your test results directory
+          name: cypress-screenshots-failed
+          path: cypress/screenshots-failed/
