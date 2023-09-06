@@ -63,4 +63,9 @@ jobs:
         uses: actions/upload-artifact@v2
         with:
           name: cypress-screenshots-failed
-          path: cypress/results
+          path: cypress/screenshots
+      - name: List Directory Contents
+        run: |
+  
+          # List the directory contents
+          ls -la
