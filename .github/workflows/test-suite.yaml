@@ -63,4 +63,4 @@ jobs:
         uses: actions/upload-artifact@v2
         with:
           name: cypress-screenshots-failed
-          path: cypress/screenshots
+          path: cypress/results
