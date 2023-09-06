@@ -44,7 +44,7 @@ module.exports = defineConfig({
   reporters: ['junit'],
   reporterOptions: {
     junit: {
-      mochaFile: 'results/results_cypress.xml', // Path to the XML report file
+      mochaFile: './cypress/results/results_cypress.xml',
     },
   },
 });
