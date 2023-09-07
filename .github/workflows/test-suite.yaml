@@ -58,17 +58,11 @@ jobs:
           docker exec cms-db mysql -ucms -pjenkins cms -e "INSERT INTO oauth_client_scopes (clientId, scopeId) VALUES ('MrGPc7e3IL1hA6w13l7Ru5giygxmNiafGNhFv89d', 'all') ON DUPLICATE KEY UPDATE scopeId = scopeId"
           docker run --ipc=host --name cms-cypress --link=cms-web:web -v $(pwd)/cypress.config.js:/app/cypress.config.js -v $(pwd)/cypress:/app/cypress ghcr.io/xibosignage/xibo-cms:cypress bash -c "CYPRESS_baseUrl=http://web /app/node_modules/.bin/cypress run --config screenshotsFolder=/app/results,video=false --reporter junit --reporter-options 'mochaFile=/app/results/results_cypress_[hash].xml,toConsole=true'"
         continue-on-error: true
-
-      - name: Copy Cypress screenshots to workspace
+      - name: Copy Cypress test results from container to host
         run: |
-          # Copy screenshots to the GitHub workspace directory.
-          mkdir -p $GITHUB_WORKSPACE/screenshots
-          ls -la
-          cp -r cypress/screenshots/* $GITHUB_WORKSPACE/screenshots
-        continue-on-error: true
-
-      - name: Upload Cypress screenshots as an artifact
+          docker cp cms-cypress:/app/results $GITHUB_WORKSPACE/results
+      - name: Save Cypress test results as an artifact
         uses: actions/upload-artifact@v2
         with:
-          name: cypress-screenshots
-          path: $GITHUB_WORKSPACE/screenshots
+          name: cypress-test-results
+          path: $GITHUB_WORKSPACE/results
