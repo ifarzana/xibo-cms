@@ -63,7 +63,9 @@ jobs:
         run: |
           # Copy screenshots to the GitHub workspace directory.
           mkdir -p $GITHUB_WORKSPACE/screenshots
+          ls -la
           cp -r cypress/screenshots/* $GITHUB_WORKSPACE/screenshots
+        continue-on-error: true
 
       - name: Upload Cypress screenshots as an artifact
         uses: actions/upload-artifact@v2
