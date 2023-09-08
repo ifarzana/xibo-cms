@@ -58,8 +58,9 @@ jobs:
           docker exec cms-db mysql -ucms -pjenkins cms -e "INSERT INTO oauth_client_scopes (clientId, scopeId) VALUES ('MrGPc7e3IL1hA6w13l7Ru5giygxmNiafGNhFv89d', 'all') ON DUPLICATE KEY UPDATE scopeId = scopeId"
           docker run -d --ipc=host --name cms-cypress --link=cms-web:web -v $(pwd)/cypress.config.js:/app/cypress.config.js -v $(pwd)/cypress:/app/cypress ghcr.io/xibosignage/xibo-cms:cypress bash -c "CYPRESS_baseUrl=http://web /app/node_modules/.bin/cypress run --config screenshotsFolder=/app/cypress/results,video=true --reporter junit --reporter-options 'mochaFile=/app/cypress/results/results_cypress_[hash].xml,toConsole=true'"
         continue-on-error: true
-      - name: Copy Cypress test results from container to host
+      - name: List Directories in cypress container
         run: |
+          docker exec -t cms-cypress /bin/bash -c "cd /app/; ls -la"
           docker exec -t cms-cypress /bin/bash -c "cd /app/results; ls -la"
       - name: List Directories in $GITHUB_WORKSPACE
         run: |
@@ -69,4 +70,4 @@ jobs:
         uses: actions/upload-artifact@v2
         with:
           name: cypress-test-results
-          path: $GITHUB_WORKSPACE/cypress/results
+          path: $GITHUB_WORKSPACE/cypress
