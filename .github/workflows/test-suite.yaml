@@ -61,10 +61,12 @@ jobs:
       - name: Copy Cypress test results from container to host
         run: |
           docker ps
+          docker exec cms-cypress ls /
           docker exec cms-cypress ls /app
+          docker exec cms-cypress ls /app/results
           docker cp cms-cypress:/app/results $GITHUB_WORKSPACE/results
       - name: Save Cypress test results as an artifact
         uses: actions/upload-artifact@v2
         with:
           name: cypress-test-results
-          path: $GITHUB_WORKSPACE/results
+          path: $GITHUB_WORKSPACE/app/results/package-lock.json
