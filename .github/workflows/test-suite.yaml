@@ -60,7 +60,7 @@ jobs:
         continue-on-error: true
       - name: Copy Cypress test results from container to host
         run: |
-          docker cp cms-cypress:/app/cypress/results $GITHUB_WORKSPACE/cypress/results
+          docker exec -t cms-cypress /bin/bash -c "cd /app/results; ls -la""
       - name: Save Cypress test results as an artifact
         uses: actions/upload-artifact@v2
         with:
