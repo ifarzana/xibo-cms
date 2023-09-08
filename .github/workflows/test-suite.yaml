@@ -61,6 +61,10 @@ jobs:
       - name: Copy Cypress test results from container to host
         run: |
           docker exec -t cms-cypress /bin/bash -c "cd /app/results; ls -la"
+      - name: List Directories in $GITHUB_WORKSPACE
+        run: |
+          cd $GITHUB_WORKSPACE
+          ls -d */
       - name: Save Cypress test results as an artifact
         uses: actions/upload-artifact@v2
         with:
