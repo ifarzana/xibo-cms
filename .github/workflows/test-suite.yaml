@@ -61,7 +61,7 @@ jobs:
       - name: List Directories in cypress container
         run: |
           docker exec -t cms-cypress /bin/bash -c "cd /app/; ls -la"
-          docker exec -t cms-cypress /bin/bash -c "cd /app/cypress/results; ls -la"
+          docker exec -t cms-cypress /bin/bash -c "cd /app/results; ls -la"
         continue-on-error: true
       - name: List Directories in $GITHUB_WORKSPACE
         run: |
