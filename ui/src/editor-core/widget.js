@@ -149,6 +149,7 @@ const Widget = function(id, data, regionId = null, layoutObject = null) {
 
   // Cached data
   this.cachedData = {};
+  this.forceRecalculateData = false;
 
   this.validateRequiredElements = function() {
     const moduleType = this.subType;
@@ -319,23 +320,24 @@ const Widget = function(id, data, regionId = null, layoutObject = null) {
     this.expireStatus = status;
 
     // save status message
-    this.expireStatusTitle = '<p>' + EXPIRE_STATUS_MSG_MAP[status] + '</p>';
+    this.expireStatusTitle = '<p class="font-weight-bold mb-0 text-left">' +
+      EXPIRE_STATUS_MSG_MAP[status] + '</p>';
 
     if (this.fromDt > this.DATE_MIN) {
       this.expireStatusTitle +=
-      '<p>' +
+      '<p class="mb-0">' +
       widgetStatusTrans.startTime +
       ': ' +
-      moment.unix(this.fromDt).format(jsDateFormat) +
+      moment.unix(this.fromDt).tz(timezone).format(jsDateFormat) +
       '</p>';
     }
 
     if (this.toDt < this.DATE_MAX) {
       this.expireStatusTitle +=
-      '<p>' +
+      '<p class="mb-0">' +
       widgetStatusTrans.endTime +
       ': ' +
-      moment.unix(this.toDt).format(jsDateFormat) +
+      moment.unix(this.toDt).tz(timezone).format(jsDateFormat) +
       '</p>';
     }
 
@@ -739,7 +741,6 @@ Widget.prototype.saveElements = function(
     dataType: 'json',
     data: JSON.stringify([
       {
-        widgetId: widgetId,
         elements: elementsToSave,
       },
     ]),
@@ -1079,6 +1080,14 @@ Widget.prototype.getData = function() {
   // If data request is already in progress, return cached promise
   if (self.cachedDataPromise) {
     return self.cachedDataPromise;
+  }
+
+  if (self.forceRecalculateData) {
+    // Clear cached data
+    self.cachedData = {};
+
+    // Set force back to false (since we're going to get new data)
+    self.forceRecalculateData = false;
   }
 
   // If widget already has data for that index, use cached data

@@ -68,6 +68,7 @@
     {% endif %}
     </body>
     <script type="text/javascript">
+        var xiboICTargetId = {{ widgetId }};
         window.globalOptions = {
           originalWidth: {{ width }},
           originalHeight: {{ height }},
@@ -92,6 +93,7 @@
             data-gap="{{ item.gapBetweenHbs }}"
             data-extends-override="{{ item.extends.override }}"
             data-extends-with="{{ item.extends.with }}"
+            data-escape-html="{{ item.extends.escapeHtml }}"
     >{{ item.content|raw }}</script>
 {% endfor %}
 {% for widgetId, parser in onInitialize %}

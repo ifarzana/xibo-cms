@@ -498,23 +498,52 @@ $(function() {
         const hbsTemplate = hbs(
           Object.assign(data, globalOptions),
         );
+        let topPos = data.top;
+        let leftPos = data.left;
+
+        if (data.group) {
+          if (data.group.isMarquee) {
+            topPos = (data.top - data.group.top);
+            leftPos = (data.left - data.group.left);
+          } else {
+            if (data.top >= data.group.top) {
+              topPos = (data.top - data.group.top);
+            }
+            if (data.left >= data.group.left) {
+              leftPos = (data.left - data.group.left);
+            }
+          }
+        }
+
         let cssStyles = {
           height: data.height,
           width: data.width,
           position: 'absolute',
-          top: data.top,
-          left: data.left,
-          'z-index': data.layer,
+          top: topPos,
+          left: leftPos,
+          zIndex: data.layer,
           transform: `rotate(${data?.rotation || 0}deg)`,
         };
 
         if (isStatic) {
           cssStyles = {
             ...cssStyles,
-            position: 'absolute',
             top: data.top,
             left: data.left,
-            'z-index': data.layer,
+            zIndex: data.layer,
+          };
+        }
+
+        if (!data.isGroup && data.dataOverride === 'text' &&
+          data.group.isMarquee &&
+          (data.effect === 'marqueeLeft' || data.effect === 'marqueeRight')) {
+          cssStyles = {
+            ...cssStyles,
+            position: 'static',
+            top: 'unset',
+            left: 'unset',
+            width: 'auto',
+            display: 'inline-block',
           };
         }
 
@@ -546,6 +575,7 @@ $(function() {
         elementCopy.hbs = null;
         elementCopy.dataOverride = null;
         elementCopy.dataOverrideWith = null;
+        elementCopy.escapeHtml = null;
 
         // Compile the template if it exists
         if ($template && $template.length > 0) {
@@ -553,6 +583,8 @@ $(function() {
               $template?.data('extends-override');
           elementCopy.dataOverrideWith =
               $template?.data('extends-with');
+          elementCopy.escapeHtml =
+              $template?.data('escape-html');
 
           elementCopy.hbs = Handlebars.compile($template.html());
         }
@@ -682,6 +714,7 @@ $(function() {
             ) + 1;
         };
         const renderDataItem = function(
+          isGroup,
           dataItemKey,
           dataItem,
           item,
@@ -691,6 +724,7 @@ $(function() {
           pinnedSlot,
           groupId,
           $groupContent,
+          groupObj,
         ) {
           // For each data item, parse it and add it to the content;
           if (item.hasOwnProperty('hbs') &&
@@ -745,27 +779,64 @@ $(function() {
                         data-group-key="${dataItemKey}"></div>`);
             const groupKey = '.' + groupId +
                 '--item[data-group-key=%key%]';
+            let groupItemStyles = {
+              width: groupObj.width,
+              height: groupObj.height,
+            };
+
+            if (groupObj && groupObj.isMarquee) {
+              groupItemStyles = {
+                ...groupItemStyles,
+                position: 'relative',
+                display: 'flex',
+                flexShrink: '0',
+              };
+            }
+
+            $groupContentItem.css(groupItemStyles);
 
             if ($groupContent &&
               $groupContent.find(
                 groupKey.replace('%key%', dataItemKey),
-              ).length === 0
-            ) {
+              ).length === 0) {
               $groupContent.append($groupContentItem);
             }
 
-            const $itemContainer = $groupContent.find(
-              groupKey.replace('%key%', dataItemKey),
-            );
+            let isSingleElement = false;
+
+            if (!isGroup && item.dataOverride === 'text' &&
+              groupObj.isMarquee) {
+              if (item.effect === 'marqueeLeft' ||
+                  item.effect === 'marqueeRight') {
+                if ($groupContent.find(
+                  groupKey.replace('%key%', dataItemKey),
+                ).length === 1) {
+                  $groupContent.find(
+                    groupKey.replace('%key%', dataItemKey),
+                  ).remove();
+                }
+                isSingleElement = true;
+              } else if (item.effect === 'marqueeDown' ||
+                item.effect === 'marqueeUp') {
+                isSingleElement = false;
+              }
+            }
+
+            const $itemContainer = isSingleElement ?
+              $groupContent : $groupContent.find(
+                groupKey.replace('%key%', dataItemKey),
+              );
 
             $itemContainer.append(
               renderElement(
                 item.hbs,
                 Object.assign(
                   item.templateData,
+                  {isGroup},
                   (String(item.dataOverride).length > 0 &&
                       String(item.dataOverrideWith).length > 0) ?
                     dataItem : {data: dataItem},
+                  {group: groupObj},
                 )),
             );
 
@@ -924,6 +995,13 @@ $(function() {
             });
         });
 
+        const isMarqueeFn = (effect) => {
+          return effect === 'marqueeLeft' ||
+            effect === 'marqueeRight' ||
+            effect === 'marqueeUp' ||
+            effect === 'marqueeDown';
+        };
+
         // Parse standalone elements
         $.each(Object.keys(elementGroups.standalone),
           function(itemIndex, itemId) {
@@ -1001,8 +1079,7 @@ $(function() {
 
                     if (hasStandaloneSlotFilled) {
                       hasStandaloneSlotFilled = false;
-                      if (lastSingleSlotFilled % maxSlot === 0 &&
-                          itemsObj.length > 1) {
+                      if (lastSingleSlotFilled % maxSlot === 0) {
                         lastSingleSlotFilled = null;
                       }
                       return false;
@@ -1033,6 +1110,7 @@ $(function() {
               const groupDataKeys = mappedSlotsGroupData[slotKey];
               const $grpContent =
                   $(`<div class="${groupSlotId}"></div>`);
+              const isMarquee = isMarqueeFn(groupSlotObj.effect);
 
               if (groupDataKeys.length > 0) {
                 $.each(groupDataKeys, function(dataKeyIndx, dataKey) {
@@ -1040,9 +1118,10 @@ $(function() {
                     $.each(groupSlotObj?.items,
                       function(itemKey, groupItem) {
                         renderDataItem(
+                          true,
                           dataKey,
                           dataKey === 'empty' ?
-                            dataKey : dataItems[dataKey - 1],
+                            dataKey : {...(dataItems[dataKey - 1] || {})},
                           groupItem,
                           slotKey,
                           maxSlot,
@@ -1050,18 +1129,42 @@ $(function() {
                           pinnedSlot,
                           groupSlotId,
                           $grpContent,
+                          {...groupSlotObj, isMarquee},
                         );
                       });
                   }
                 });
 
-                $content.append($grpContent.prop('outerHTML'));
+                $grpContent.css({
+                  width: groupSlotObj.width,
+                  height: groupSlotObj.height,
+                  position: 'absolute',
+                  top: groupSlotObj.top,
+                  left: groupSlotObj.left,
+                  overflow: 'hidden',
+                  zIndex: groupSlotObj.layer,
+                });
+
+                if (isMarquee) {
+                  const $scroller =
+                    $(`<div class="${groupSlotObj.id}--marquee scroll"></div>`);
+
+                  $scroller.css({
+                    display: 'flex',
+                    height: groupSlotObj.height,
+                  });
+
+                  $grpContent.wrapInner($scroller.prop('outerHTML'));
+                }
+
+                $content.append($grpContent);
 
                 $grpContent.xiboElementsRender(
                   {
                     ...groupSlotObj,
                     itemsPerPage: maxSlot,
                     numItems: dataItems.length,
+                    selector: `.${groupSlotId}`,
                   },
                   $grpContent.find(`.${groupSlotObj.id}--item`),
                 );
@@ -1090,7 +1193,6 @@ $(function() {
                   widget.isRepeatData,
                 );
 
-                const itemGroupProps = itemsGroup.slice(0, 1)[0];
                 $.each(Object.keys(standaloneData[keyValue]),
                   function(slotIndex, slotKey) {
                     const slotObj =
@@ -1100,14 +1202,16 @@ $(function() {
                     const grpCln = `${keyValue}_page-${slotKey}`;
                     const $grpItem =
                       $(`<div class="${grpCln}"></div>`);
+                    const isMarquee = isMarqueeFn(slotObj.effect);
 
                     if (dataKeys.length > 0) {
                       $.each(dataKeys,
                         function(dataKeyIndx, dataKey) {
                           renderDataItem(
+                            false,
                             dataKey,
                             dataKey === 'empty' ?
-                              dataKey : dataItems[dataKey - 1],
+                              dataKey : {...(dataItems[dataKey - 1] || {})},
                             slotObj,
                             slotKey,
                             maxSlot,
@@ -1115,18 +1219,51 @@ $(function() {
                             pinnedSlot,
                             grpCln,
                             $grpItem,
+                            {...slotObj, isMarquee},
                           );
                         });
 
-                      $content.append($grpItem.prop('outerHTML'));
+                      if (isMarquee) {
+                        $grpItem.css({
+                          width: slotObj.width,
+                          height: slotObj.height,
+                          position: 'absolute',
+                          top: slotObj.top,
+                          left: slotObj.left,
+                          overflow: 'hidden',
+                          zIndex: slotObj.layer,
+                        });
+
+                        const $scroller =
+                          $(`<div class="${slotObj.id}--marquee scroll"/>`);
+
+                        $scroller.css({
+                          display: 'flex',
+                          height: slotObj.height,
+                        });
+
+                        $grpItem.wrapInner($scroller.prop('outerHTML'));
+                      } else {
+                        $grpItem.css({
+                          position: 'absolute',
+                          top: slotObj.top,
+                          left: slotObj.left,
+                          width: slotObj.width,
+                          height: slotObj.height,
+                          zIndex: slotObj.layer,
+                        });
+                      }
+
+                      $content.append($grpItem);
 
                       $grpItem.xiboElementsRender(
                         {
-                          ...itemGroupProps,
+                          ...slotObj,
                           parentId: grpCln,
                           itemsPerPage: maxSlot,
                           numItems: dataItems.length,
                           id: grpCln,
+                          selector: `.${grpCln}`,
                         },
                         $grpItem.find(`.${grpCln}--item`),
                       );

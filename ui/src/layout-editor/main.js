@@ -1108,14 +1108,28 @@ lD.deleteSelectedObject = function() {
       null,
     );
   } else if (lD.selectedObject.type === 'widget') {
-    // Delete widget's region
-    const regionId =
-      lD.getObjectByTypeAndId('region', lD.selectedObject.regionId).regionId;
-    lD.deleteObject(
-      'region',
-      regionId,
-      null,
-    );
+    // Drawer widget
+    if (lD.selectedObject.drawerWidget) {
+      const drawerId = lD.getObjectByTypeAndId('drawer').regionId;
+
+      lD.deleteObject(
+        'widget',
+        lD.selectedObject.widgetId,
+        drawerId,
+        true,
+      );
+    } else {
+      // Delete widget's region
+      const regionId = (lD.selectedObject.drawerWidget) ?
+        lD.getObjectByTypeAndId('drawer').regionId :
+        lD.getObjectByTypeAndId('region', lD.selectedObject.regionId).regionId;
+
+      lD.deleteObject(
+        'region',
+        regionId,
+        null,
+      );
+    }
   } else if (lD.selectedObject.type === 'element') {
     // Delete element
     lD.deleteObject(
@@ -1138,11 +1152,13 @@ lD.deleteSelectedObject = function() {
  * @param {string} objectType - Object type (widget, region)
  * @param {string} objectId - Object id
  * @param {*} objectAuxId - Auxiliary object id (f.e.region for a widget)
+ * @param {boolean=} drawerWidget - If we're deleting a drawer widget
  */
 lD.deleteObject = function(
   objectType,
   objectId,
   objectAuxId = null,
+  drawerWidget = false,
 ) {
   // For elements, we just delete from the widget
   if (objectType === 'element') {
@@ -1175,12 +1191,52 @@ lD.deleteObject = function(
     lD.layout.deleteObject(
       objectType,
       objectId,
+      null,
+      true,
+      !drawerWidget, // don't deselect Object if it's a drawer widget
     ).then((_res) => {
-      // Behavior if successful
-      lD.reloadData(lD.layout,
-        {
-          refreshEditor: true,
+      if (drawerWidget) {
+        // Detach action form
+        lD.propertiesPanel.detachActionsForm();
+
+        // Remove object manually from drawer (to avoid refresh)
+        delete lD.layout.drawer.widgets[
+          `widget_${lD.layout.drawer.regionId}_${objectId}`
+        ];
+
+        // Update dropdown with existing widgets
+        const $actionOpenedForm = lD.propertiesPanel.actionForm.find('form');
+        const actionFormData = $actionOpenedForm.data();
+        lD.populateDropdownWithLayoutElements(
+          $actionOpenedForm.find('[name="widgetId"]'),
+          {
+            value: actionFormData.widgetId,
+            filters: ['drawerWidgets'],
+          },
+          actionFormData,
+        );
+
+        // Deselect object
+        lD.selectObject({
+          target: null,
+          reloadViewer: false,
+          reloadPropertiesPanel: false,
         });
+        lD.viewer.selectElement();
+
+        // Render properties panel with action tab
+        lD.propertiesPanel.render(
+          lD.selectedObject,
+          false, // Action edit mode
+          true, // Open action tab
+        );
+      } else {
+        // Reload data ( if not a drawer widget)
+        lD.reloadData(lD.layout,
+          {
+            refreshEditor: true,
+          });
+      }
 
       lD.common.hideLoadingScreen('deleteObject');
     }).catch((error) => { // Fail/error
@@ -2258,7 +2314,7 @@ lD.addMediaToPlaylist = function(
       lD.reloadData(
         lD.layout,
         {
-          callback: () => {
+          callBack: () => {
             const $actionForm =
               lD.propertiesPanel.DOMObject.find('.action-element-form');
 
@@ -2336,6 +2392,11 @@ lD.getObjectByTypeAndId = function(type, id, auxId) {
   if (type === 'layout') {
     targetObject = lD.layout;
   } else if (type === 'region') {
+    // If id is a number, we need to get the unique id
+    if (!isNaN(id)) {
+      id = 'region_' + id;
+    }
+
     targetObject = lD.layout.regions[id];
   } else if (type === 'drawer') {
     targetObject = lD.layout.drawer;
@@ -2350,16 +2411,47 @@ lD.getObjectByTypeAndId = function(type, id, auxId) {
   } else if (type === 'element-group') {
     targetObject = lD.layout.canvas.widgets[auxId].elementGroups[id];
   } else if (type === 'widget') {
+    const getWidgetFromRegion = function(widgetId, region) {
+      // If id is a number, we need to get the unique id
+      if (!isNaN(widgetId)) {
+        widgetId = 'widget_' + region.regionId + '_' + widgetId;
+      }
+
+      return region.widgets[widgetId];
+    };
+
     if (
       lD.layout.drawer.id != undefined &&
       (lD.layout.drawer.id == auxId || auxId == 'drawer')
     ) {
-      targetObject = lD.layout.drawer.widgets[id];
+      targetObject = getWidgetFromRegion(id, lD.layout.drawer);
     } else if (
       lD.layout.canvas.id != undefined &&
       (lD.layout.canvas.id == auxId || auxId == 'canvas')
     ) {
-      targetObject = lD.layout.canvas.widgets[id];
+      targetObject = getWidgetFromRegion(id, lD.layout.canvas);
+    } else if (auxId == 'search') {
+      // Search on drawer if canvas exist
+      (lD.layout.drawer.id != undefined) &&
+        (targetObject = getWidgetFromRegion(id, lD.layout.drawer));
+
+      // Search on canvas if drawer exist, and we don't have target yet
+      ($.isEmptyObject(targetObject) && lD.layout.canvas.id != undefined) &&
+        (targetObject = getWidgetFromRegion(id, lD.layout.canvas));
+
+      // If we still don't have target, check on all layout regions
+      if ($.isEmptyObject(targetObject)) {
+        Object.values(lD.layout.regions).every((region) => {
+          targetObject = getWidgetFromRegion(id, region);
+
+          // If we found the widget, break the loop
+          if (!$.isEmptyObject(targetObject)) {
+            return false;
+          }
+
+          return true;
+        });
+      }
     } else {
       targetObject = lD.layout.regions[auxId].widgets[id];
     }
@@ -3749,6 +3841,7 @@ lD.addAction = function(options) {
         clearPrevious: true,
         selectAfterRender: true,
         openEditActionAfterRender: _res?.data?.actionId,
+        openActionTab: _res?.data?.actionId,
       },
     );
   }).fail(function(_data) {
@@ -3916,6 +4009,7 @@ lD.populateDropdownWithLayoutElements = function(
   const getRegions = filters.indexOf('regions') !== -1;
   const getWidgets = filters.indexOf('widgets') !== -1;
   const getLayouts = filters.indexOf('layout') !== -1;
+  const getPlaylists = filters.indexOf('playlist') !== -1;
   const getDrawerWidgets = filters.indexOf('drawerWidgets') !== -1;
 
   const addGroupToDropdown = function(groupName) {
@@ -3942,15 +4036,15 @@ lD.populateDropdownWithLayoutElements = function(
 
   // Update type value
   const updateTypeValue = function() {
-    // If input is target, and widgetId has value
-    // then update the widget drawer edit element
-    const $widgetIDInput = ($typeInput) ?
-      $typeInput.parents('form').find('[name=widgetId]') : null;
-
     // If there's no typeInput, stop
     if (!$typeInput) {
       return;
     }
+
+    const $form = $typeInput.parents('form');
+    // If input is target, and widgetId has value
+    // then update the widget drawer edit element
+    const $widgetIDInput = $form.find('[name=widgetId]');
 
     let typeInputValue = $dropdown.find(':selected').data('type');
 
@@ -3959,18 +4053,28 @@ lD.populateDropdownWithLayoutElements = function(
     if (
       $typeInput.attr('id') === 'input_target'
     ) {
+      const dropdownVal = $dropdown.val();
       // Update targetId and target
-      actionData.targetId = $dropdown.val();
+      actionData.targetId = dropdownVal;
       actionData.target = typeInputValue;
+
+      // Update also on form
+      $form.data('targetId', dropdownVal);
+      $form.data('target', typeInputValue);
     }
 
     // Update sourceId and source
     if (
       $typeInput.attr('id') === 'input_source'
     ) {
+      const dropdownVal = $dropdown.val();
       // Update sourceId and source
-      actionData.sourceId = $dropdown.val();
+      actionData.sourceId = dropdownVal;
       actionData.source = typeInputValue;
+
+      // Update also on form
+      $form.data('sourceId', dropdownVal);
+      $form.data('source', typeInputValue);
     }
 
     // Update widgetId
@@ -4018,6 +4122,9 @@ lD.populateDropdownWithLayoutElements = function(
     }
   };
 
+  // Clear dropdown
+  $dropdown.find('option:not([value=""]):not([value="create"])').remove();
+
   // Layout
   if (getLayouts) {
     // Layout group
@@ -4041,10 +4148,26 @@ lD.populateDropdownWithLayoutElements = function(
     );
   }
 
+  // Playlists
+  if (getPlaylists) {
+    addGroupToDropdown(
+      editorsTrans.actions.playlists,
+    );
+  }
+
   // Get regions and/or widgets
-  if (getRegions || getWidgets) {
+  if (getRegions || getWidgets || getPlaylists) {
     for (const region of Object.values(lD.layout.regions)) {
-      if (getRegions && region.isPlaylist === false) {
+      if (
+        (
+          getRegions &&
+          region.isPlaylist === false
+        ) ||
+        (
+          getPlaylists &&
+          region.isPlaylist === true
+        )
+      ) {
         addElementToDropdown({
           id: region.regionId,
           name: region.name,
@@ -4096,7 +4219,7 @@ lD.populateDropdownWithLayoutElements = function(
 
   // Set initial value if provided
   if (value !== null) {
-    $dropdown.val(value);
+    $dropdown.val(value).trigger('change');
     updateTypeValue();
 
     if (getDrawerWidgets) {
@@ -4106,7 +4229,7 @@ lD.populateDropdownWithLayoutElements = function(
 
   // Handle dropdown change
   // and update type
-  $dropdown.on('change', function() {
+  $dropdown.off('change').on('change', function() {
     if (getDrawerWidgets) {
       // Open/edit widget
       handleEditWidget($dropdown.val());
@@ -4123,8 +4246,9 @@ lD.populateDropdownWithLayoutElements = function(
 /**
  * Edit drawer widget
  * @param {object} actionData - Data for the action
+ * @param {boolean=} actionEditMode - Enter edit mode
  */
-lD.editDrawerWidget = function(actionData) {
+lD.editDrawerWidget = function(actionData, actionEditMode = true) {
   // 1. Detach actions form to a temporary container or body
   lD.propertiesPanel.detachActionsForm();
 
@@ -4142,16 +4266,23 @@ lD.editDrawerWidget = function(actionData) {
   // Save previous selected object
   lD.previousSelectedObject = lD.selectedObject;
 
+  // Target
+  const $target = actionEditMode ? $widgetInViewer : null;
+
   lD.selectObject({
-    target: $widgetInViewer,
+    target: $target,
     forceSelect: true,
   });
 
   // Select element in viewer
-  lD.viewer.selectElement($widgetInViewer);
+  lD.viewer.selectElement($target);
 
-  // 4. Open property panel with drawer widget
-  lD.propertiesPanel.render(widget, undefined, true);
+  // 4. Open property panel with drawer widget or same object
+  lD.propertiesPanel.render(
+    actionEditMode ? widget : lD.previousSelectedObject,
+    actionEditMode,
+    true,
+  );
 };
 
 /**
