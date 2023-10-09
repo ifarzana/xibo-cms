@@ -63,4 +63,6 @@ jobs:
         with:
           name: cypress-test-results
           path: cypress/results
+      - name: Fail the PR if tests failed
+        if: ${{ failure() }}
         run: echo "Cypress tests failed. Please fix the issues and try again." && exit 1
