@@ -57,4 +57,4 @@ jobs:
       - name: Change Ownership of Test Results
         if: failure()
         run: |
-          docker run --ipc=host --name cms-cypress --link=cms-web:web -v $(pwd)/cypress:/app/cypress ghcr.io/xibosignage/xibo-cms:cypress chown -R 1001:1001 /app/cypress/results
+          docker exec -t cms-cypress /bin/bash -c "chown -R 1001:1001 /app/cypress/results"
