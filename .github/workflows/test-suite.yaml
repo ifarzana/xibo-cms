@@ -56,5 +56,5 @@ jobs:
           docker run --ipc=host --name cms-cypress --link=cms-web:web -v $(pwd)/cypress.config.js:/app/cypress.config.js -v $(pwd)/cypress:/app/cypress ghcr.io/xibosignage/xibo-cms:cypress bash -c "CYPRESS_baseUrl=http://web /app/node_modules/.bin/cypress run --config screenshotsFolder=/app/cypress/results,video=false --reporter junit --reporter-options 'mochaFile=/app/cypress/results/results_cypress_[hash].xml,toConsole=true'; echo $? > /app/cypress/results/exit_code; chown -R 1001:1001 /app/cypress/results"
       - name: Get Exit Code
         run: |
-          exit_code=$(cat /app/cypress/results/exit_code)
+          exit_code=$(cat cypress/results/exit_code)
           echo "Exit Code: $exit_code"
