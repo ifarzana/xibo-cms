@@ -32,7 +32,7 @@ describe('Displays', function() {
   // Seeded displays: disp1, disp2, disp3, disp4, disp5
   // Seeded display Groups: disp5_dispgrp
   // Seeded layouts: disp4_default_layout
-  it.skip('searches and edit existing display', function() {
+  it('searches and edit existing display', function() {
     // search for a display disp1 and edit
     cy.intercept({
       url: '/display?*',
@@ -53,6 +53,7 @@ describe('Displays', function() {
 
     // Wait for the grid reload
     cy.wait('@loadGridAfterSearch');
+    cy.get('#displays tbody tr').should('have.length', 1);
 
     // Click on the first row element to open the delete modal
     cy.get('#displays tr:first-child .dropdown-toggle').click();
@@ -84,7 +85,7 @@ describe('Displays', function() {
   });
 
   // Display: disp2
-  it.skip('searches and delete existing display', function() {
+  it.only('searches and delete existing display', function() {
     cy.intercept({
       url: '/display?*',
       query: {display: 'disp2'},
@@ -98,6 +99,7 @@ describe('Displays', function() {
 
     // Wait for the grid reload
     cy.wait('@loadGridAfterSearch');
+    // cy.get('#displays tbody tr').should('have.length', 1);
 
     // Click on the first row element to open the delete modal
     cy.get('#displays tr:first-child .dropdown-toggle').click();
@@ -111,7 +113,7 @@ describe('Displays', function() {
   });
 
   // Display: disp3
-  it.skip('searches and authorise an unauthorised display', function() {
+  it('searches and authorise an unauthorised display', function() {
     // search for a display disp1 and edit
     cy.intercept({
       url: '/display?*',
@@ -132,6 +134,7 @@ describe('Displays', function() {
 
     // Wait for the grid reload
     cy.wait('@loadGridAfterSearch');
+    cy.get('#displays tbody tr').should('have.length', 1);
 
     // Click on the first row element to open the delete modal
     cy.get('#displays tr:first-child .dropdown-toggle').click();
@@ -207,7 +210,7 @@ describe('Displays', function() {
   });
 
   // Display: disp5
-  it.skip('manage membership for disp5', function() {
+  it('manage membership for disp5', function() {
     cy.intercept({
       url: '/display?*',
       query: {display: 'disp5'},
@@ -234,6 +237,7 @@ describe('Displays', function() {
 
     // Wait for the grid reload
     cy.wait('@loadGridAfterSearch');
+    cy.get('#displays tbody tr').should('have.length', 1);
 
     // Click on the first row element to open the delete modal
     cy.get('#displays tr:first-child .dropdown-toggle').click();
