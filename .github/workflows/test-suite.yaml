@@ -1,9 +1,10 @@
 name: Test Suite
 
 on:
-  pull_request:
-    branches-ignore:
-      - master
+  issue_comment:
+    types:
+      - created
+      - edited
 
 jobs:
   test-suite:
@@ -27,6 +28,16 @@ jobs:
           build-args: GIT_COMMIT=${{ github.sha }}
           push: false
           load: true
+      - name: Check Comment
+        id: check_comment
+        run: |
+          if [[ "${{ github.event.comment.body }}" == "Comment" ]]; then
+            echo "Comment matches, proceeding to run Cypress."
+            echo "::set-output name=run_cypress::true"
+          else
+            echo "Comment does not match, skipping Cypress run."
+            echo "::set-output name=run_cypress::false"
+          fi
       - name: Pull
         run: |
           docker pull mysql:8
