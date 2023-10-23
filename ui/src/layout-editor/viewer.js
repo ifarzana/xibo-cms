@@ -24,6 +24,8 @@
 
 // Load templates
 const LayerManager = require('../editor-core/layer-manager.js');
+const DateFormatHelper = require('../helpers/date-format-helper.js');
+
 const viewerTemplate = require('../templates/viewer.hbs');
 const viewerWidgetTemplate = require('../templates/viewer-widget.hbs');
 const viewerLayoutPreview = require('../templates/viewer-layout-preview.hbs');
@@ -94,6 +96,23 @@ const Viewer = function(parent, container) {
     this.parent.editorContainer.find('#layerManager'),
     this.DOMObject,
   );
+
+  this.multiSelectActive = false;
+
+  // Events for shift key
+  addEventListener('keydown', (e) => {
+    if (e.key === 'Shift') {
+      this.multiSelectActive = true;
+      $('body').attr('multi-select-active', true);
+    }
+  });
+
+  addEventListener('keyup', (e) => {
+    if (e.key === 'Shift') {
+      this.multiSelectActive = false;
+      $('body').removeAttr('multi-select-active');
+    }
+  });
 };
 
 /**
@@ -1198,6 +1217,22 @@ Viewer.prototype.updateElementGroup = _.throttle(function(
 }, drawThrottle);
 
 /**
+ * Update element group
+ * @param {object} elementGroup
+ */
+Viewer.prototype.updateElementGroupLayer = _.throttle(function(
+  elementGroup,
+  layer,
+) {
+  const $container = lD.viewer.DOMObject.find(`#${elementGroup.elementId}`);
+
+  // Update element index
+  $container.css({
+    'z-index': (layer) ? layer : elementGroup.layer,
+  });
+}, drawThrottle);
+
+/**
  * Update Region
  * @param {object} region - region object
  * @param {boolean} changed - if region was changed
@@ -1393,6 +1428,13 @@ Viewer.prototype.renderElement = function(
       top: element.group.top * viewerScale,
       width: element.group.width * viewerScale,
     });
+
+    // Update element group index
+    if (element.group.layer) {
+      $groupContainer.css({
+        'z-index': element.group.layer,
+      });
+    }
   }
 
   // Render element content and handle interactions after
@@ -1418,36 +1460,6 @@ Viewer.prototype.renderElementContent = function(
   // Get asset container to add element assets
   const $assetContainer =
     this.parent.editorContainer.find('#asset-container');
-
-  const macroRegex = /^%(\+|\-)[0-9]([0-9])?(d|h|m|s)%$/gi;
-
-  // TODO: Copied from player.js, to be added to a library so it can be reused
-  const composeUTCDateFromMacro = (macroStr) => {
-    const utcFormat = 'YYYY-MM-DDTHH:mm:ssZ';
-    const dateNow = moment().utc();
-    // Check if input has the correct format
-    const dateStr = String(macroStr);
-
-    if (dateStr.length === 0 ||
-        dateStr.match(macroRegex) === null
-    ) {
-      return dateNow.format(utcFormat);
-    }
-
-    // Trim the macro date string
-    const dateOffsetStr = dateStr.replaceAll('%', '');
-    const params = (op) => dateOffsetStr.replace(op, '')
-      .split(/(\d+)/).filter(Boolean);
-    const addRegex = /^\+/g;
-    const subtractRegex = /^\-/g;
-
-    // Check if it's add or subtract offset and return composed date
-    if (dateOffsetStr.match(addRegex) !== null) {
-      return dateNow.add(...params(addRegex)).format(utcFormat);
-    } else if (dateOffsetStr.match(subtractRegex) !== null) {
-      return dateNow.subtract(...params(subtractRegex)).format(utcFormat);
-    }
-  };
 
   // Get element template ( most of the time
   // template will be already loaded/cached )
@@ -1506,7 +1518,10 @@ Viewer.prototype.renderElementContent = function(
     // to the extended template, if it exists
     // or to hardcoded values
     if (!element.width || !element.height) {
-      if (template.parent) {
+      if (template.startWidth && template.startHeight) {
+        element.width = template.startWidth;
+        element.height = template.startHeight;
+      } else if (template.parent) {
         element.width = template.parent.startWidth;
         element.height = template.parent.startHeight;
       } else {
@@ -1600,15 +1615,76 @@ Viewer.prototype.renderElementContent = function(
         const elData = elementData?.data;
         const meta = elementData?.meta;
 
+        // If parent widget isn't valid, replace error message
+        if (!$.isEmptyObject(parentWidget.validateData)) {
+          const $messageContainer = $elementContainer.find('.invalid-parent');
+          const errorArray = [$messageContainer.prop('title')];
+          const hasGroup = Boolean(element.groupId);
+          const $groupContainer = (hasGroup) ?
+            $elementContainer.parents('.designer-element-group') : null;
+
+          // Add if elemens has no group or
+          // if has group but the group doesn't have message yet
+          if (
+            !hasGroup ||
+            (
+              hasGroup &&
+              $groupContainer.find('> .invalid-parent').length == 0
+            )
+          ) {
+            // Required elements message
+            const requiredElementsErrorMessage =
+              parentWidget.checkRequiredElements();
+
+            (requiredElementsErrorMessage) &&
+              errorArray.push(
+                '<p>' +
+                requiredElementsErrorMessage +
+                '</p>');
+
+            // Default error message
+            (parentWidget.validateData.errorMessage) &&
+              errorArray.push(
+                '<p>' +
+                parentWidget.validateData.errorMessage +
+                '</p>');
+
+            (parentWidget.validateData.sampleDataMessage) &&
+              errorArray.push(
+                '<p class="sample-data">( ' +
+                parentWidget.validateData.sampleDataMessage +
+                ' )</p>');
+
+            // If element has group, move error to group
+            (hasGroup) && $messageContainer.appendTo(
+              $elementContainer.parents('.designer-element-group'),
+            );
+
+            // Set title/tooltip
+            $messageContainer.tooltip('dispose')
+              .prop('title', '<div class="custom-tooltip">' +
+              errorArray.join('') + '</div>');
+            $messageContainer.tooltip();
+
+            // Show tooltip
+            $messageContainer.removeClass('d-none');
+          }
+
+          // Remove message from element if it's in a group
+          if (hasGroup) {
+            $elementContainer.find('.invalid-parent').remove();
+          }
+        }
+
         // Check all data elements and make replacements
         for (const key in elData) {
           if (elData.hasOwnProperty(key)) {
             const data = elData[key];
 
             // Check if data needs to be replaced
-            if (String(data) && String(data).match(macroRegex) !== null) {
+            if (String(data) && String(data).match(DateFormatHelper.macroRegex) !== null) {
               // Replace macro with current date
-              elData[key] = composeUTCDateFromMacro(data);
+              elData[key] = DateFormatHelper.composeUTCDateFromMacro(data);
             }
           }
         }
@@ -1630,7 +1706,7 @@ Viewer.prototype.renderElementContent = function(
         const elementParseDataFn = window[`onElementParseData_${element.id}`];
         const hasElementParseDataFn = typeof elementParseDataFn === 'function';
         const isInData = extendOverrideKey !== null &&
-          elData && elData.hasOwnProperty(extendOverrideKey);
+          elData != undefined && elData.hasOwnProperty(extendOverrideKey);
         const isInMeta = metaKey !== null &&
           meta.hasOwnProperty(metaKey);
 
@@ -1640,6 +1716,9 @@ Viewer.prototype.renderElementContent = function(
               (elData) && elData[extendWithDataKey];
           } else if (isInMeta) {
             convertedProperties[extendOverrideKey] = meta[metaKey];
+          } else if (extendWithDataKey === 'mediaId') {
+            convertedProperties[extendOverrideKey] =
+              '[[mediaId=' + element.mediaId + ']]';
           } else {
             convertedProperties[extendOverrideKey] =
               (elData) && elData[extendWithDataKey];
@@ -1683,6 +1762,17 @@ Viewer.prototype.renderElementContent = function(
 
           // Replace asset id with asset url
           hbsHtml = hbsHtml.replace(match, assetUrl);
+        });
+
+        // Replace [[mediaId]] with media URL or element media id
+        const mediaURLRegex = /\[\[mediaId=[\w&\-]+\]\]/gi;
+        hbsHtml.match(mediaURLRegex)?.forEach((match) => {
+          const mediaId = match.split('[[mediaId=')[1].split(']]')[0];
+          const mediaUrl =
+            urlsForApi.library.download.url.replace(':id', mediaId);
+
+          // Replace asset id with asset url
+          hbsHtml = hbsHtml.replace(match, mediaUrl);
         });
 
         // Append hbs html to the element
@@ -2379,6 +2469,10 @@ Viewer.prototype.selectElement = function(
   if (!multiSelect) {
     this.DOMObject.find('.selected, .selected-from-layer-manager')
       .removeClass('selected selected-from-layer-manager');
+
+    // Also remove select from layer manager from canvas
+    self.DOMObject.find('.designer-region-canvas')
+      .removeClass('canvas-element-selected-from-layer-manager');
   }
 
   // Remove all editing from groups
@@ -2468,9 +2562,7 @@ Viewer.prototype.updateMoveable = function(
     }
 
     // Update snap to elements targets
-    if (multipleSelected) {
-      this.moveable.elementGuidelines = [];
-    } else if (
+    if (
       updateTarget &&
       this.moveableOptions.snapToElements
     ) {
@@ -3116,6 +3208,8 @@ Viewer.prototype.editGroup = function(
     const viewerOverlayIndex =
       self.DOMObject.find('.viewer-overlay').css('z-index');
 
+    // Save original layer to data
+    $(groupDOMObject).data('layer', $(groupDOMObject).css('z-index'));
     $(groupDOMObject).css('z-index', Number(viewerOverlayIndex) + 1);
 
     // Give group the same background as the layout's
@@ -3129,8 +3223,12 @@ Viewer.prototype.editGroup = function(
     self.DOMObject.find('.designer-region-canvas')
       .css('zIndex', lD.layout.canvas.zIndex);
 
-    // Unset group z-index
-    $(groupDOMObject).css('z-index', '');
+    // Unset or reset group z-index
+    const originalLayer = $(groupDOMObject).data('layer');
+    $(groupDOMObject).css(
+      'z-index',
+      originalLayer ? originalLayer : '',
+    );
 
     // Remove background color
     $(groupDOMObject).css('background-color', '');

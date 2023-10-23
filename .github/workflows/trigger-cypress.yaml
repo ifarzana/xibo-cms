@@ -1,0 +1,25 @@
+name: Comment Triggered Workflow
+
+on:
+  issue_comment:
+    types:
+      - created
+      - edited
+
+jobs:
+  comment_triggered_job:
+    runs-on: ubuntu-latest
+
+    steps: 
+      - name: Check Comment
+        id: check_comment
+        run: |
+          if [[ "${{ github.event.comment.body }}" == "Comment text" ]]; then
+            echo "::set-output name=trigger_workflow::true"
+          else
+            echo "::set-output name=trigger_workflow::false"
+          fi
+
+      - name: Trigger Workflow
+        if: steps.check_comment.outputs.trigger_workflow == 'true'
+        run: echo "The comment matches, triggering the workflow."

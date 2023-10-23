@@ -222,10 +222,7 @@ class Widget implements \JsonSerializable
     public $folderId;
     public $permissionsFolderId;
 
-    /** @var int[] Original Module Media Ids */
-    private $originalModuleMediaIds = [];
-
-    /** @var array[int] Original Media IDs */
+    /** @var int[] Original Media IDs */
     private $originalMediaIds = [];
 
     /** @var array[WidgetAudio] Original Widget Audio */
@@ -599,16 +596,6 @@ class Widget implements \JsonSerializable
     }
 
     /**
-     * Clear Media
-     *  this must only clear module media, not "primary" media
-     */
-    public function clearCachedMedia()
-    {
-        $this->load();
-        $this->mediaIds = array_values(array_diff($this->mediaIds, $this->originalModuleMediaIds));
-    }
-
-    /**
      * Assign Audio Media
      * @param WidgetAudio $audio
      */
@@ -830,7 +817,6 @@ class Widget implements \JsonSerializable
         // Load any media assignments for this widget
         $this->mediaIds = $this->widgetMediaFactory->getByWidgetId($this->widgetId);
         $this->originalMediaIds = $this->mediaIds;
-        $this->originalModuleMediaIds = $this->widgetMediaFactory->getModuleOnlyByWidgetId($this->widgetId);
 
         // Load any widget audio assignments
         $this->audio = $this->widgetAudioFactory->getByWidgetId($this->widgetId);
@@ -894,7 +880,7 @@ class Widget implements \JsonSerializable
                     }
                 }
 
-                // Is this a medtor selector? and if so should we assign the library media
+                // Is this a media selector? and if so should we assign the library media
                 if ($property->type === 'mediaSelector') {
                     if (!empty($value) && is_numeric($value)) {
                         $this->assignMedia(intval($value));

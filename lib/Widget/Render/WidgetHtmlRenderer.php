@@ -428,7 +428,7 @@ class WidgetHtmlRenderer
 
         // Extend any elements which need to be extended.
         foreach ($moduleTemplates as $moduleTemplate) {
-            if ($moduleTemplate->type === 'element' && $moduleTemplate->dataType !== 'global'
+            if ($moduleTemplate->type === 'element'
                 && !empty($moduleTemplate->extends)
                 && array_key_exists($moduleTemplate->extends->template, $globalElements)
             ) {
@@ -570,6 +570,12 @@ class WidgetHtmlRenderer
                         'gapBetweenHbs' => $module->stencil->gapBetweenHbs,
                     ];
                 }
+                if ($module->stencil->head !== null) {
+                    $twig['head'][] = $this->twig->fetchFromString(
+                        $this->decorateTranslations($module->stencil->head),
+                        $module->getPropertyValues()
+                    );
+                }
                 if ($module->stencil->style !== null) {
                     $twig['style'][] = $module->stencil->style;
                 }
@@ -608,6 +614,14 @@ class WidgetHtmlRenderer
                                     );
                             }
                         }
+
+                        // Check the element for a mediaId property and set it to
+                        // [[mediaId=the_id_from_the_mediaId_property]]
+                        if (!empty($element['mediaId'])) {
+                            // Update the element so we output the mediaId replacement
+                            $widgetElements[$widgetIndex]['elements'][$elementIndex]['properties']['mediaId']
+                                = '[[mediaId=' . $element['mediaId'] . ']]';
+                        }
                     }
                 }
 
@@ -618,8 +632,11 @@ class WidgetHtmlRenderer
         // Render out HBS/style from templates
         // we do not render Twig here
         foreach ($moduleTemplates as $moduleTemplate) {
+            $this->getLog()->debug('render: outputting module template ' . $moduleTemplate->templateId);
+
             // Handle extends.
             $extension = $moduleTemplate->getUnmatchedProperty('extends');
+            $isExtensionHasHead = false;
             $isExtensionHasStyle = false;
 
             // Render out any hbs
@@ -659,10 +676,23 @@ class WidgetHtmlRenderer
                     ],
                 ];
 
+                if ($extension->stencil->head !== null) {
+                    $twig['head'][] = $extension->stencil->head;
+                    $isExtensionHasHead = true;
+                }
+
                 if ($extension->stencil->style !== null) {
                     $twig['style'][] = $extension->stencil->style;
                     $isExtensionHasStyle = true;
                 }
+            }
+
+            // Render the module template's head, if present and not already output by the extension
+            if ($moduleTemplate->stencil !== null
+                && $moduleTemplate->stencil->head !== null
+                && !$isExtensionHasHead
+            ) {
+                $twig['head'][] = $moduleTemplate->stencil->head;
             }
 
             // Render the module template's style, if present and not already output by the extension
