@@ -10,11 +10,11 @@ jobs:
   comment_triggered_job:
     runs-on: ubuntu-latest
 
-    steps: 
+    steps:
       - name: Check Comment
         id: check_comment
         run: |
-          if [[ "${{ github.event.comment.body }}" == "Comment text" ]]; then
+          if [[ "${{ github.event.comment.body }}" == "Comment" ]]; then
             echo "::set-output name=trigger_workflow::true"
           else
             echo "::set-output name=trigger_workflow::false"
