@@ -33,10 +33,10 @@ jobs:
         run: |
           if [[ "${{ github.event.comment.body }}" == "Comment" ]]; then
             echo "Comment matches, proceeding to run Cypress."
-            echo "::set-output name=run_cypress::true"
+            echo "RUN_CYPRESS=true" >> $GITHUB_ENV
           else
             echo "Comment does not match, skipping Cypress run."
-            echo "::set-output name=run_cypress::false"
+            echo "RUN_CYPRESS=false" >> $GITHUB_ENV
           fi
       - name: Pull
         run: |
@@ -68,7 +68,7 @@ jobs:
           docker run --ipc=host --name cms-cypress --link=cms-web:web -v $(pwd)/cypress.config.js:/app/cypress.config.js -v $(pwd)/cypress:/app/cypress ghcr.io/xibosignage/xibo-cms:cypress bash -c "CYPRESS_baseUrl=http://web /app/node_modules/.bin/cypress run --config screenshotsFolder=/app/cypress/results,video=false --reporter junit --reporter-options 'mochaFile=/app/cypress/results/results_cypress_[hash].xml,toConsole=true' && chown -R 1001:1001 /app/cypress/results && exit \${PIPESTATUS[0]};"
         continue-on-error: true
       - name: Save Cypress test results as an artifact
-        if: steps.check_comment.outputs.run_cypress == 'true'
+        if: steps.check_comment.outputs.RUN_CYPRESS == 'true'
         uses: actions/upload-artifact@v3
         with:
           name: cypress-test-results
