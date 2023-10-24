@@ -1,6 +1,9 @@
 name: Test Suite
 
 on:
+  pull_request:
+    branches-ignore:
+      - master
   issue_comment:
     types:
       - created
@@ -31,12 +34,13 @@ jobs:
       - name: Check Comment
         id: check_comment
         run: |
-          if [[ "${{ github.event.comment.body }}" == "Comment" ]]; then
-            echo "Comment matches, proceeding to run Cypress."
-            echo "RUN_CYPRESS=true" >> $GITHUB_ENV
+          comment_body="${{ github.event.comment.body }}"
+          if [[ "$comment_body" =~ TEST:(.*?)end ]]; then
+            specs="${BASH_REMATCH[1]}"
+            echo "Specs to test: $specs"
+            echo "TEST_SPECS=$specs" >> $GITHUB_ENV
           else
-            echo "Comment does not match, skipping Cypress run."
-            echo "RUN_CYPRESS=false" >> $GITHUB_ENV
+            echo "No specs specified in the comment."
           fi
       - name: Pull
         run: |
@@ -66,6 +70,11 @@ jobs:
           docker exec cms-db mysql -ucms -pjenkins cms -e "INSERT INTO oauth_clients (id, secret, name, userId, authCode, clientCredentials) VALUES ('MrGPc7e3IL1hA6w13l7Ru5giygxmNiafGNhFv89d', 'Pk6DdDgu2HzSoepcMHRabY60lDEvQ9ucTejYvc5dOgNVSNaOJirCUM83oAzlwe0KBiGR2Nhi6ltclyNC1rmcq0CiJZXzE42KfeatQ4j9npr6nMIQAzMal8O8RiYrIoono306CfyvSSJRfVfKExIjj0ZyE4TUrtPezJbKmvkVDzh8aj3kbanDKatirhwpfqfVdfgsqVNjzIM9ZgKHnbrTX7nNULL3BtxxNGgDMuCuvKiJFrLSyIIz1F4SNrHwHz', 'cypress', 1, 0, 1)"
           docker exec cms-db mysql -ucms -pjenkins cms -e "INSERT INTO oauth_client_scopes (clientId, scopeId) VALUES ('MrGPc7e3IL1hA6w13l7Ru5giygxmNiafGNhFv89d', 'all') ON DUPLICATE KEY UPDATE scopeId = scopeId"
           docker run --ipc=host --name cms-cypress --link=cms-web:web -v $(pwd)/cypress.config.js:/app/cypress.config.js -v $(pwd)/cypress:/app/cypress ghcr.io/xibosignage/xibo-cms:cypress bash -c "CYPRESS_baseUrl=http://web /app/node_modules/.bin/cypress run --config screenshotsFolder=/app/cypress/results,video=false --reporter junit --reporter-options 'mochaFile=/app/cypress/results/results_cypress_[hash].xml,toConsole=true' && chown -R 1001:1001 /app/cypress/results && exit \${PIPESTATUS[0]};"
+          if [[ -n "$TEST_SPECS" ]]; then
+            echo "The comment matches, triggering the workflow with directories: $TEST_SPECS."
+          else          
+            echo "No directories specified, exiting with an error."
+          fi
         continue-on-error: true
       - name: Save Cypress test results as an artifact
         if: ${{ env.RUN_CYPRESS == 'true' }}
