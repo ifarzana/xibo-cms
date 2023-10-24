@@ -15,7 +15,7 @@ jobs:
         id: check_comment
         run: |
           comment_body="${{ github.event.comment.body }}"
-          if [[ "$comment_body" =~ ^TEST:\ (.*)$ ]]; then
+          if [[ "$comment_body" =~ TEST:(.*?)end ]]; then
             specs="${BASH_REMATCH[1]}"
             echo "Specs to test: $specs"
             echo "TEST_SPECS=$specs" >> $GITHUB_ENV
