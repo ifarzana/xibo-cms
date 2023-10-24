@@ -25,8 +25,8 @@ jobs:
 
       - name: Trigger Workflow
         run: |
-          if [[ -n "$TEST_DIRECTORIES" ]]; then
-            echo "The comment matches, triggering the workflow with directories: $TEST_DIRECTORIES."
+          if [[ -n "$TEST_SPECS" ]]; then
+            echo "The comment matches, triggering the workflow with directories: $TEST_SPECS."
           else
             echo "No directories specified, exiting with an error."
             exit 1
