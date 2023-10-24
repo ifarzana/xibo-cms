@@ -22,7 +22,6 @@ jobs:
           else
             directories=""
             echo "No directories specified in the comment."
-          }
 
           echo "::set-env name=TEST_DIRECTORIES::$directories"
 
