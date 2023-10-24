@@ -15,16 +15,13 @@ jobs:
         id: check_comment
         run: |
           comment_body="${{ github.event.comment.body }}"
-          # Use a regular expression to capture the desired part of the comment
           if [[ "$comment_body" =~ ^TEST:\ (.*)$ ]]; then
             directories="${BASH_REMATCH[1]}"
             echo "Directories to test: $directories"
+            echo "TEST_DIRECTORIES=$directories" >> $GITHUB_ENV
           else
-            directories=""
             echo "No directories specified in the comment."
           fi
-
-          echo "::set-env name=TEST_DIRECTORIES::$directories"
 
       - name: Trigger Workflow
         if: env.TEST_DIRECTORIES != ''
