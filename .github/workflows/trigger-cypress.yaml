@@ -16,13 +16,18 @@ jobs:
         run: |
           comment_body="${{ github.event.comment.body }}"
           if [[ "$comment_body" =~ ^TEST:\ (.*)$ ]]; then
-            directories="${BASH_REMATCH[1]}"
-            echo "Directories to test: $directories"
-            echo "TEST_DIRECTORIES=$directories" >> $GITHUB_ENV
+            specs="${BASH_REMATCH[1]}"
+            echo "Specs to test: $specs"
+            echo "TEST_SPECS=$specs" >> $GITHUB_ENV
           else
-            echo "No directories specified in the comment."
+            echo "No specs specified in the comment."
           fi
 
       - name: Trigger Workflow
-        if: env.TEST_DIRECTORIES != ''
-        run: echo "The comment matches, triggering  the workflow."
+        run: |
+          if [[ -n "$TEST_DIRECTORIES" ]]; then
+            echo "The comment matches, triggering the workflow with directories: $TEST_DIRECTORIES."
+          else
+            echo "No directories specified, exiting with an error."
+            exit 1
+          fi
