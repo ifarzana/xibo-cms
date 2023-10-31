@@ -21,10 +21,10 @@ jobs:
             # Split the content by commas and remove spaces
             IFS=',' read -ra content_array <<< "$specs"
             content_array=("${content_array[@]// /}")  # Remove spaces from all elements
-            # Remove leading and trailing slashes from each element
-            content_array=("${content_array[@]//\//}")
-            # Prefix the elements with "cypress/e2e/"
-            content_array=("cypress/e2e/${content_array[@]}")
+            # Add "cypress/e2e/" prefix to each element
+            for ((i=0; i<${#content_array[@]}; i++)); do
+            content_array[$i]="cypress/e2e/${content_array[$i]}"
+            done
             # Join the content array elements with commas
             content_no_spaces="$(IFS=','; echo "${content_array[*]}")"
             echo "Extracted content: $content_no_spaces"
