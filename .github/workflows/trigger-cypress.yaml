@@ -20,6 +20,9 @@ jobs:
             echo "Specs to test: $specs"
             # Split the content by spaces
             IFS=' ' read -ra content_array <<< "$specs"
+            content_array=("${content_array[@]/ /}")  # Remove spaces
+            # Prefix the elements with "cypress/e2e/"
+            content_array=("cypress/e2e/${content_array[@]}")
             # Join the content array elements with commas
             content_no_spaces="$(IFS=','; echo "${content_array[*]}")"
             echo "Extracted content: $content_no_spaces"
