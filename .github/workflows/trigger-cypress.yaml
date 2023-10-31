@@ -15,7 +15,10 @@ jobs:
         id: check_comment
         run: |
           comment_body="${{ github.event.comment.body }}"
-          if [[ "$comment_body" =~ TEST:(.*?)end ]]; then
+          if [[ "$comment_body" =~ TEST:\ (all|\*) ]]; then
+            test_all=true
+            echo "All tests will be executed."
+          elif [[ "$comment_body" =~ TEST:(.*?)end ]]; then
             specs="${BASH_REMATCH[1]}"
             echo "Specs to test: $specs"
             # Split the content by commas and remove spaces
