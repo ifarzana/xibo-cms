@@ -18,10 +18,15 @@ jobs:
           if [[ "$comment_body" =~ TEST:(.*?)end ]]; then
             specs="${BASH_REMATCH[1]}"
             echo "Specs to test: $specs"
-            echo "TEST_SPECS=$specs" >> $GITHUB_ENV
+            # Split the content by spaces
+            IFS=' ' read -ra content_array <<< "$content"
+            # Join the content array elements with commas
+            content_no_spaces="$(IFS=','; echo "${content_array[*]}")"
+            echo "Extracted content: $content_no_spaces"
           else
-            echo "No specs specified in the comment."
-          fi
+            echo "Comment does not match the expected format."
+            exit 1
+          }
 
       - name: Trigger Workflow
         run: |
