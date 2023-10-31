@@ -1,11 +1,6 @@
 name: Test Suite
 
 on:
-  pull_request:
-    types:
-      - opened
-    branches-ignore:
-      - master
   issue_comment:
     types:
       - created
