@@ -19,7 +19,7 @@ jobs:
             specs="${BASH_REMATCH[1]}"
             echo "Specs to test: $specs"
             # Split the content by spaces
-            IFS=' ' read -ra content_array <<< "$content"
+            IFS=' ' read -ra content_array <<< "$specs"
             # Join the content array elements with commas
             content_no_spaces="$(IFS=','; echo "${content_array[*]}")"
             echo "Extracted content: $content_no_spaces"
