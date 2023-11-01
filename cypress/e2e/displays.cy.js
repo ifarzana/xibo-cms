@@ -85,7 +85,7 @@ describe('Displays', function() {
   });
 
   // Display: disp2
-  it.only('searches and delete existing display', function() {
+  it.only('searches and delete existing display 2', function() {
     cy.intercept({
       url: '/display?*',
       query: {display: 'disp2'},
