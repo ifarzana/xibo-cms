@@ -111,7 +111,6 @@ jobs:
     steps:
       - name: Wait for Status Check
         run: |
-          # Use a loop to periodically check the status of the "Build Containers and Run Tests" status check
           until github.checks.listForRef({
             owner: github.repository.owner,
             repo: github.repository,
