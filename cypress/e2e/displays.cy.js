@@ -53,7 +53,7 @@ describe('Displays', function() {
 
     // Wait for the grid reload
     cy.wait('@loadGridAfterSearch');
-    cy.get('#displays tbody tr').should('have.length', 1);
+    cy.get('#displays tbody tr').should('have.length', 3);
 
     // Click on the first row element to open the delete modal
     cy.get('#displays tr:first-child .dropdown-toggle').click();
@@ -99,7 +99,7 @@ describe('Displays', function() {
 
     // Wait for the grid reload
     cy.wait('@loadGridAfterSearch');
-    cy.get('#displays tbody tr').should('have.length', 1);
+    cy.get('#displays tbody tr').should('have.length', 3);
 
     // Click on the first row element to open the delete modal
     cy.get('#displays tr:first-child .dropdown-toggle').click();
