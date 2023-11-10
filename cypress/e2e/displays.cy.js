@@ -113,7 +113,7 @@ describe('Displays', function() {
   });
 
   // Display: disp3
-  it.only('searches and authorise an unauthorised display', function() {
+  it('searches and authorise an unauthorised display', function() {
     // search for a display disp1 and edit
     cy.intercept({
       url: '/display?*',
