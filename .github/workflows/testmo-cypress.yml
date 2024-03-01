@@ -1,0 +1,59 @@
+name: Test
+
+on: [push, workflow_dispatch]
+
+jobs:
+  testmo-cypress:
+    name: Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-node@v3
+        with:
+          node-version: 19
+          cache: npm
+
+      # Skip this line if not installing your own Node.js packages
+      - run: npm ci
+
+      # Install Testmo CLI tool locally (then use npx testmo .. to run it)
+      - run: npm install --no-save @testmo/testmo-cli
+
+      # Optionally add a couple of fields such as the git hash and link to the build
+      - run: |
+          npx testmo automation:resources:add-field --name git --type string \
+            --value ${GITHUB_SHA:0:7} --resources resources.json
+          RUN_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          npx testmo automation:resources:add-link --name build \
+            --url $RUN_URL --resources resources.json
+
+      # Check if the required variables are available
+      - run: |
+          if [[ -z "${TESTMO_URL}" ]]; then
+            echo "The TESTMO_URL secret is not defined for this repository"
+            exit 1
+          fi
+
+          if [[ -z "${TESTMO_TOKEN}" ]]; then
+            echo "The TESTMO_TOKEN secret is not defined for this repository"
+            exit 1
+          fi
+        env:
+          TESTMO_URL: https://fgdfgfd.testmo.net
+          TESTMO_TOKEN: testmo_api_eyJpdiI6ImJZT2RDRHZUVlAyS05Ia25tSXZFakE9PSIsInZhbHVlIjoiZmZCM01hdXcwYVEyZDQ5UUdlZ1dkTWJGTklpbWhMT29qOHRDckxLWHNnND0iLCJtYWMiOiI2N2U1ZmJmZWE3ZDcyMDExNTM5MjM0OTRmNTNkZmYzMTViNzk5MTE5ZDc1YWQxYmY2N2I0NzE1MTgwODU3NWViIiwidGFnIjoiIn0=
+
+      # Run automated tests and report results to Testmo
+      - run: |
+          npx testmo automation:run:submit \
+            --instance "$TESTMO_URL" \
+            --project-id 1 \
+            --name "Mocha test run" \
+            --source "cypress-github-tests" \
+            --resources resources.json \
+            --results results/*.xml \
+            -- npm run mocha-junit # Note space after --
+        env:
+          TESTMO_URL: https://fgdfgfd.testmo.net
+          TESTMO_TOKEN: testmo_api_eyJpdiI6ImJZT2RDRHZUVlAyS05Ia25tSXZFakE9PSIsInZhbHVlIjoiZmZCM01hdXcwYVEyZDQ5UUdlZ1dkTWJGTklpbWhMT29qOHRDckxLWHNnND0iLCJtYWMiOiI2N2U1ZmJmZWE3ZDcyMDExNTM5MjM0OTRmNTNkZmYzMTViNzk5MTE5ZDc1YWQxYmY2N2I0NzE1MTgwODU3NWViIiwidGFnIjoiIn0=
+
