@@ -25,7 +25,7 @@ describe('Folders', function() {
     cy.login();
   });
 
-  it('creating a new folder and rename it', () => {
+  it('creating a new folder and rename it-2', () => {
     cy.visit('/folders/view');
     cy.contains('Root Folder').rightclick();
     cy.contains('Create').should('be.visible').click();
