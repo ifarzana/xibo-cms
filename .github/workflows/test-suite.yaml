@@ -149,7 +149,7 @@ jobs:
           fi
 
       # Step 5: Add a comment to the PR with the workflow result
-      - name: Add workflow result as comment on PR
+      - name: Add workflow result as comment on PR 2
         uses: actions/github-script@v6
         if: always()
         with:
