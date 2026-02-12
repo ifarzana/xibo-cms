@@ -20,7 +20,7 @@ const mockUser = {
   phone: '123456789',
 } as User;
 
-describe('Media page', () => {
+describe('Media page 123', () => {
   test('renders the Table View text', async () => {
     render(
       <QueryClientProvider client={testQueryClient}>
